@@ -9,6 +9,7 @@
 #include "video_core/page_manager.h"
 #include "video_core/renderer_vulkan/vk_bind_helper.h"
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
+#include "video_core/renderer_vulkan/gow3_camera_inputs.h"
 #include "video_core/renderer_vulkan/vk_constant_ring.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/renderer_vulkan/vk_object_motion.h"
@@ -336,6 +337,16 @@ private:
     bool motion_draw = false;
     u64 motion_geometry{};    ///< vertex-stream identity of the current direct draw
     bool gbuffer_draw = false;
+    // Diagnostic-only; never feeds legacy camera motion, jitter or NGX.
+    bool gow3_inputs_enabled = false;
+    bool gow3_depth_draw = false;
+    bool gow3_in_display = false;
+    u64 gow3_frame = 0;
+    u32 gow3_unsnapshotted = 0;
+    Gow3::CameraInputs gow3_inputs;
+    void Gow3FrameBoundary(const GraphicsPipeline* pipeline);
+    void ObserveGow3Inputs(const Shader::Info& stage, u32 slot,
+                           const void* snapshot, size_t size);
     std::unique_ptr<TemporalUpscaler> upscaler; // spartanport: FSR (docs/upscaler.md)
     std::array<float, 2> draw_jitter{};         ///< viewport offset of the current draw, pixels
     std::array<float, 2> target_scale{1.0f, 1.0f}; ///< pass drawn into the upscaler's output-size images

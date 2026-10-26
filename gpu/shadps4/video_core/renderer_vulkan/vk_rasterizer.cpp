@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <xxhash.h>
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "spartanport_toggles.h"
@@ -51,6 +54,11 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
       pipeline_cache{instance, scheduler, liverpool, buffer_cache.GetSparsePageShift()},
       host_markers_enabled{EmulatorSettings.IsVkHostMarkersEnabled()},
       guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()} {
+    const char* gow3_env = std::getenv("SPARTAN_GOW3_INPUT_DIAGNOSTICS");
+    gow3_inputs_enabled = gow3_env && std::strcmp(gow3_env, "1") == 0;
+    if (gow3_inputs_enabled) {
+        std::printf("GoW3 inputs: diagnostic only; DLAA disabled, stable ring snapshots required\n");
+    }
     // Before the rasterizer is bound: Liverpool enqueues buffers only once it sees it.
     draw_prep = std::make_unique<DrawPreparation>(pipeline_cache);
     scene_targets = std::make_unique<SceneTargets>(instance, scheduler, runtime, texture_cache);
@@ -264,8 +272,10 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     } else {
         db_desc.first = {};
     }
-    // spartanport: the G-buffer pass (5+ color targets) holds the scene depth, and its constants the
-    // main camera (shadow passes bind the same layout with the light's camera).
+    // GoW3 diagnostics use depth-only draws, not the legacy multi-target heuristic.
+    gow3_depth_draw = gow3_inputs_enabled && key.mrt_mask == 0 && db_desc.first &&
+        regs.depth_control.depth_enable && regs.depth_control.depth_write_enable;
+    // Legacy G-buffer constants describe the main camera (not shadow passes).
     gbuffer_draw = camera_motion->Enabled() && std::popcount(key.mrt_mask) >= 5 && db_desc.first;
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
@@ -979,6 +989,33 @@ void Rasterizer::DiagPassBoundary(bool force) {
     diag_addresses = force ? std::array<VAddr, 8>{} : addresses;
 }
 
+void Rasterizer::Gow3FrameBoundary(const GraphicsPipeline* pipeline) {
+    const auto& regs = Regs();
+    if (gow3_inputs_enabled) {
+        const bool display = pipeline->GetGraphicsKey().mrt_mask == 1 && regs.color_buffers[0] &&
+            FrameCapture::IsDisplayBuffer(regs.color_buffers[0].Address());
+        // Display copies can contain multiple draws. Close once per transition,
+        // independently of the legacy camera/upscaler enable state.
+        if (display && !gow3_in_display) {
+            const auto prior = gow3_inputs.status;
+            const auto samples = gow3_inputs.samples;
+            const auto status = gow3_inputs.FinishFrame();
+            if (status != prior || gow3_frame % 120 == 0 || FrameCapture::Active()) {
+                char note[256];
+                std::snprintf(note, sizeof(note),
+                    "GoW3 inputs: frame=%llu status=%s samples=%u unsnapshotted=%u size=%ux%u DLAA=blocked\n",
+                    (unsigned long long)gow3_frame, Gow3::Name(status), samples,
+                    gow3_unsnapshotted, gow3_inputs.width, gow3_inputs.height);
+                std::printf("%s", note);
+                if (FrameCapture::Active()) FrameCapture::Note(note);
+            }
+            ++gow3_frame;
+            gow3_unsnapshotted = 0;
+        }
+        gow3_in_display = display;
+    }
+}
+
 void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                             bool is_indexed, u32 index_offset) {
     if (DrawPipe::OnStageB()) {
@@ -987,6 +1024,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     }
     DiagPassBoundary(false);
     const auto& regs = Regs();
+    Gow3FrameBoundary(pipeline);
     // spartanport: the pass copying a finished frame to a display buffer; the previous draw's
     // target is that frame.
     if (camera_motion->Enabled() && regs.color_buffers[0] &&
@@ -1233,6 +1271,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
     }
+    Gow3FrameBoundary(pipeline);
     const VAddr count_address = indirect.count;
     const u32 stride = indirect.stride;
     const u32 max_count = indirect.max_count;
@@ -2108,6 +2147,19 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     return true;
 }
 
+void Rasterizer::ObserveGow3Inputs(const Shader::Info& stage, u32 slot,
+                                  const void* snapshot, size_t size) {
+    if (!gow3_depth_draw || stage.sw_stage != Shader::SwStage::Vertex ||
+        stage.pgm_hash != Gow3::DepthShader || slot != 1 || size != 144) return;
+    const auto& depth = texture_cache.GetImage(db_desc.first);
+    if (depth.info.pixel_format != vk::Format::eD32SfloatS8Uint) return;
+    if (!snapshot) ++gow3_unsnapshotted;
+    // A missing snapshot invalidates this frame instead of dereferencing a guest
+    // pointer whose mapping check proves only a range, not readable host memory.
+    gow3_inputs.Observe(stage.pgm_hash, slot, snapshot, size, depth.info.guest_address,
+                        depth.info.size.width, depth.info.size.height);
+}
+
 void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* prepared,
                              Shader::Backend::Bindings& binding,
                              Shader::PushData& push_data, u32& write_index) {
@@ -2126,6 +2178,9 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                                      constant_ring->Data(ring->offset), ring->size);
             }
             if (!desc.IsSpecial()) {
+                if (gow3_inputs_enabled) {
+                    ObserveGow3Inputs(stage, buffer_index, constant_ring->Data(ring->offset), ring->size);
+                }
                 if (ring->size == 864 && gbuffer_draw &&
                     memory->IsValidGpuMapping(ring->address, 0)) {
                     camera_motion->OnConstants(reinterpret_cast<const float*>(ring->address));
@@ -2187,6 +2242,9 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         } else {
             const auto vsharp =
                 prepared ? prepared->buffer_sharps[buffer_index] : desc.GetSharp(stage);
+            if (gow3_inputs_enabled) {
+                ObserveGow3Inputs(stage, buffer_index, nullptr, vsharp.GetSize());
+            }
             if (vsharp.GetSize() == 864 && gbuffer_draw &&
                 memory->IsValidGpuMapping(vsharp.base_address, 0)) {
                 camera_motion->OnConstants(reinterpret_cast<const float*>(vsharp.base_address));

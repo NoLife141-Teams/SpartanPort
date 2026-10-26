@@ -299,6 +299,10 @@ if (WIN32)
 endif()
 set_source_files_properties(../tests/test_pipeline_binary_cache.cpp PROPERTIES
     COMPILE_OPTIONS "-fvisibility=hidden;-fvisibility-inlines-hidden")
+add_executable(gow3-camera-inputs-test EXCLUDE_FROM_ALL ../tests/test_gow3_camera_inputs.cpp)
+target_compile_options(gow3-camera-inputs-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-camera-inputs-test PRIVATE ..)
+
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)
