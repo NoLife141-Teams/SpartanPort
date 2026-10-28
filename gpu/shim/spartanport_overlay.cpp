@@ -33,6 +33,7 @@ extern "C" void runtime_restart(void); // src/probe.c: starts run.py again, ends
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/gow3_dlaa_control.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/renderdoc.h"
 
@@ -1620,6 +1621,13 @@ bool HandleEvent(const SDL_Event& event) {
             }
             return true;
         }
+        if(event.key.key==SDLK_F10 && !is_open && !text_entry_active &&
+           Vulkan::Gow3::NativeDlaaControl().available.load()) {
+            SDL_Window* focus=SDL_GetKeyboardFocus();
+            if(down && !event.key.repeat && focus && SDL_GetWindowID(focus)==event.key.windowID)
+                Vulkan::Gow3::NativeDlaaControl().Toggle();
+            return true;
+        }
         if (event.key.key == SDLK_F12) {
             if (down && !event.key.repeat) {
                 VideoCore::RequestScreenshot(VideoCore::ScreenshotRequest::GameOnly);
@@ -1783,7 +1791,7 @@ bool Visible() {
     return initialized && (loading || background_total || PrefetchActive() || CompileNoteActive() ||
                            menu_open || text_entry_active || choice_active || choice_retiring ||
                            toast_active || trophy_view || s.show_fps || NoticeActive() ||
-                           (s.actor_watch_supported && s.enemy_health_bar));
+                           (s.actor_watch_supported && s.enemy_health_bar) || Vulkan::Gow3::NativeDlaaControl().visible.load());
 }
 
 bool CapturesInput() {
@@ -1847,6 +1855,26 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     UpdateTrophyTextures();
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
+    if(Vulkan::Gow3::NativeDlaaControl().visible.load() && !loading && !menu_open) {
+        using Vulkan::Gow3::DlaaState;
+        auto& control=Vulkan::Gow3::NativeDlaaControl();
+        const auto state=control.state.load();
+        const char* label=state==DlaaState::Active?"DLAA ACTIF":state==DlaaState::Off?"DLAA DÉSACTIVÉ":
+            state==DlaaState::Waiting?"DLAA EN ATTENTE":state==DlaaState::Failed?"DLAA ERREUR":"DLAA INDISPONIBLE";
+        const auto* viewport=ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x+16*base_scale,
+            viewport->WorkPos.y+viewport->WorkSize.y-16*base_scale),ImGuiCond_Always,ImVec2(0,1));
+        ImGui::SetNextWindowBgAlpha(.78f);
+        ImGui::Begin("##gow3-dlaa-status",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoDecoration|
+            ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing);
+        const ImVec4 color=state==DlaaState::Active?ImVec4(.35f,1,.55f,1):
+            state==DlaaState::Off?ImVec4(.85f,.85f,.85f,1):ImVec4(1,.8f,.25f,1);
+        ImGui::TextColored(color,"%s",label);
+        ImGui::SameLine();
+        if(state==DlaaState::Active) ImGui::Text("| %u x %u | F10",control.width.load(),control.height.load());
+        else ImGui::TextUnformatted("| F10");
+        ImGui::End();
+    }
     if (loading) {
         LoadingScreen();
     }

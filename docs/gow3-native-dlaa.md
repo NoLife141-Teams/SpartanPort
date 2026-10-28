@@ -1,7 +1,7 @@
 # DLAA natif GoW3 : essai réel sur Gaia
 
 Le chemin expérimental GoW3 appelle maintenant NVIDIA NGX en mode DLAA natif
-1920×1080 vers 1920×1080. Il est indépendant de l'ancien extracteur caméra et
+1920×1080 vers 1920×1080 ou 2560×1440 vers 2560×1440. Il est indépendant de l'ancien extracteur caméra et
 des heuristiques d'upscaling héritées. Il reste explicitement activé par processus.
 
 ## Vecteurs mesurés dans le jeu
@@ -82,20 +82,27 @@ La passerelle existante `gpu/dlss_bridge` doit être compilée avec MSVC dans
 out/pyenv/Scripts/python.exe -B scripts/gow3_diagnostic_session.py `
   --seed-data C:/Users/jerem/Documents/Codex/2026-10-26/task/spartanport-dlaa-msvc/out/gow3-input-collection-f586605 `
   --game-dir C:/Games/God.of.War.III.Remastered.RECOMP.v2.1.5-KaOs/CUSA01623 `
-  --dlaa --launch --wait
+  --dlaa --resolution 1440p --fullscreen --launch --wait
 ```
 
 Le script annonce un nouveau dossier de session. Charger la sauvegarde avec
 S, Espace, puis Entrée dans le dialogue. Le DLAA démarre désactivé pour permettre
-une référence visuelle. Écrire `on` dans `dlaa.switch` l'active à la composition
-suivante ; écrire `off` rétablit la couleur native. Sans chemin de commutation,
+une référence visuelle. **F10** active/désactive le DLAA en jeu ; le badge permanent
+en bas à gauche affiche vert « DLAA ACTIF » et la résolution, gris « DÉSACTIVÉ »,
+ou ambre « EN ATTENTE », « ERREUR » ou « INDISPONIBLE ». Une demande clavier ne
+publie pas à elle seule l'état actif : une évaluation NGX réussie est nécessaire.
+Le raccourci ignore les répétitions et ne bascule pas pendant les dialogues du port.
+Il est disponible dans ce chemin expérimental, lancé avec `--dlaa`.
+Écrire `on` / `off` dans `dlaa.switch` reste possible ; F10 met aussi ce fichier
+à jour. La transition prend effet à la composition suivante. Sans chemin de commutation,
 `SPARTAN_GOW3_DLAA=1`, `SPARTAN_GOW3_INPUT_DIAGNOSTICS=1`,
 `SPARTAN_UPSCALER=none` et `SPARTAN_DLSS=1` demandent directement ce chemin.
 Les DLL doivent accompagner le probe. La disponibilité effective est attestée
 par `DLSS: ready`, la création `quality 0`, puis `GoW3 DLAA: evaluated=...`.
 
 Créer `dlss-capture/capture.trigger` après activation demande une paire bornée de
-captures GPU avant/après NGX. Chaque fichier RGBA16F fait 16588800 octets, avec
+captures GPU avant/après NGX. Chaque fichier RGBA16F fait 16588800 octets en 1080p
+ou 29491200 octets en 1440p, avec
 publication après achèvement du tick GPU. Les fichiers existants ne sont pas écrasés.
 
 ## Preuve de l'essai final
@@ -123,9 +130,49 @@ Les captures antérieures rejetées restent conservées : notamment caméra inva
 ou conflictuelle et plantages avant activation. Les premières évaluations avec
 le flag NGX LDR ont été remplacées par l'essai final en entrée linéaire HDR.
 
+## Plein écran 1440p, raccourci et comparaison réelle
+
+Session `out/gow3-sessions/20261028T033003124522Z`, binaire SHA-256
+`39f2ab39c13ffd0ff5aec66b93f950b89b42339e784234371ac00aac7a01b413`.
+Le patch de rendu « Resolution Patch - 1440p » est chargé. Le plein écran SDL
+utilise le mode exact 2560×1440 lorsque l'écran le propose ; sinon il conserve
+le mode bureau et l'annonce. La taille des ressources NGX reste celle du rendu
+natif. Un changement de résolution après création de ces ressources exige un redémarrage.
+
+F10 a activé le DLAA à la scène 796, désactivé à 2040, puis réactivé à 3571.
+La scène 3572 reprend avec `reset=1`. Le badge vert et le badge gris ont été
+observés en plein écran ; le journal confirme `DLSS 2560x1440 -> 2560x1440,
+quality 0, HDR input`. F12 exporte l'image finale du jeu sans les overlays du port.
+
+Captures finales PNG, toutes vérifiées 2560×1440, dans `runtime/user/screenshots/` :
+
+- Sans DLAA : `CUSA01623_20261027_233314_484.png`.
+- Avec DLAA : `CUSA01623_20261027_233332_334.png`.
+- Nouvelle référence sans DLAA : `CUSA01623_20261027_233356_834.png`.
+
+Ces prises sont à des instants différents : personnages et caméra ont bougé.
+Pour isoler le filtrage, la paire GPU de la scène 1250, évaluation 454, tick terminé
+23085, conserve l'entrée non filtrée et la sortie NGX de la même image, avec le
+jitter de la frame active. Ce n'est donc pas une seconde exécution sans jitter.
+`dlss-capture/comparison.png` présente deux crops identiques agrandis ×2 sans
+interpolation ; `input.png` et `output.png` restent à la résolution native.
+Ce sont des aperçus sRGB du signal linéaire avant la composition finale du jeu.
+
+Le lissage des contours est visible, mais le DLAA adoucit aussi les textures de
+roche, les fougères et les détails de Kratos. Ce réglage mérite encore d'être
+affiné ; une seule paire ne mesure ni le scintillement ni les traînées temporelles.
+RGB est fini, 11029281 composantes diffèrent, différence absolue moyenne linéaire
+0,002729 : cela prouve une sortie calculée, pas une amélioration de qualité.
+
+- Entrée brute : `d5ccc528113bb44009c20733fac5b7f28285ebbf4745daf5aab9ddd295dbfb47`.
+- Sortie brute : `382d1b3fc7ed32a97f3fffb098baf4acac40e6316612fbdeaa9d4a597d872f36`.
+- Les 62 étapes CPU/Vulkan passent : `out/gow3-validation/20261028T033339464069Z/result.json`.
+- Les huit tests Python d'analyse passent. Source et backup des six fichiers de
+  sauvegarde inchangés, attestés dans `save-verification.json`.
+
 ## Limites conservées
 
-Le test vise Gaia à 1080p sur la RTX locale. Il ne certifie pas tout le jeu,
+Les tests visent Gaia à 1080p et 1440p sur la RTX locale. Ils ne certifient pas tout le jeu,
 toutes les résolutions, les cinématiques, les effets transparents ou les coupures
 caméra. Le repli caméra sur des objets non appariés peut laisser des traînées.
 Des plantages avant activation ont aussi été conservés dans les sessions rejetées ;

@@ -5,7 +5,7 @@ Revue du 27 octobre 2026, heure de Toronto.
 Le travail de Dot est rapatrié dans ce dépôt sur la branche
 `codex/integrate-dot-gow3-diagnostics`. Il constitue une base de recherche et
 d'instrumentation expérimentale. **Le DLAA natif GoW3 est maintenant raccordé
-à NGX et testé sur Gaia en 1080p**, sous flag explicite : voir
+à NGX et testé sur Gaia en 1080p et 1440p plein écran**, sous flag explicite : voir
 [l'essai DLAA et son mode d'emploi](gow3-native-dlaa.md).
 Le pilote autonome sans supervision reste distinct du pilotage visuel utilisé ici. Le chargement
 et une collecte sous pilotage visuel de l'agent sont désormais validés; voir
@@ -52,7 +52,7 @@ build ni l'état actuel d'une instance du jeu.
 | Santé | Hook passif opt-in et journal borné; santé informative, aucune preuve de vie/mort ni décision de contrôle. |
 | Clavier | Trace passive de S et de l'axe vertical du stick gauche, désactivée par défaut; les tests caractérisent aussi les limites du replay existant. |
 | Automatisation | Modèles et tests synthétiques. Le script de menu est attaché à une ancienne session et à une empreinte précise; ce n'est pas un pilote générique prêt à lancer. |
-| DLAA/NGX | Dispatch natif 1080p avec jitter et vecteurs GPU, testé sur Gaia par le script de session `--dlaa`. Activation dédiée par processus ; pas encore d'option persistante dans le lanceur standard. |
+| DLAA/NGX | Dispatch natif 1080p/1440p avec jitter et vecteurs GPU, testé sur Gaia par le script de session `--dlaa`. F10 bascule en jeu, badge permanent de l'état effectif. Captures réelles avant/après NGX ; lissage visible mais perte de netteté à affiner. Pas encore d'option persistante dans le lanceur standard. |
 
 Les principaux diagnostics exigent des variables de processus explicites
 (`SPARTAN_GOW3_INPUT_DIAGNOSTICS`, `SPARTAN_HEALTH_PASSIVE`, `SPARTAN_KEY_TRACE`)
@@ -129,7 +129,7 @@ comme des passages réussis dans le bilan final.
 
 ## Ce qui reste pour généraliser le DLAA
 
-1. Étendre au-delà de Gaia à 1080p la validation réelle des constantes,
+1. Étendre au-delà de Gaia à 1080p/1440p la validation réelle des constantes,
    permutations, conventions clip/viewport et profondeur par échantillon.
 2. La capture bornée au cache réel est désormais exécutée sur Gaia. Étendre sa
    validation au-delà des deux intervalles capturés et résoudre les vues encore

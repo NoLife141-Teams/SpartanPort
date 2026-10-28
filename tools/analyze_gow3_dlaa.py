@@ -15,7 +15,8 @@ def analyze(directory):
     capture=json.loads((directory/'capture.json').read_text())
     if not capture['complete'] or not capture['gpu_complete'] or not capture['tick']:
         raise ValueError('GPU capture did not complete')
-    if (capture['width'],capture['height'],capture['bytes_per_image'])!=(1920,1080,16588800):
+    width,height=capture['width'],capture['height']
+    if (width,height) not in ((1920,1080),(2560,1440)) or capture['bytes_per_image']!=width*height*8:
         raise ValueError('Unexpected native DLAA dimensions or stride')
     arrays=[]
     files=[]
@@ -24,7 +25,7 @@ def analyze(directory):
         raw=path.read_bytes()
         if len(raw)!=capture['bytes_per_image']:
             raise ValueError('Truncated GPU capture')
-        pixels=np.frombuffer(raw,dtype='<f2').reshape(1080,1920,4)[...,:3].astype(np.float32)
+        pixels=np.frombuffer(raw,dtype='<f2').reshape(height,width,4)[...,:3].astype(np.float32)
         if not np.isfinite(pixels).all():
             raise ValueError('Nonfinite RGB in '+name)
         files.append(dict(name=name,sha256=hashlib.sha256(raw).hexdigest(),bytes=len(raw),

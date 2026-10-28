@@ -26,7 +26,7 @@ def hashes(directory):
     return result
 
 
-def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False):
+def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolution='native', fullscreen=False):
     if motion and not pixels:
         raise ValueError('--motion requires --pixels')
     seed, game, probe = seed.resolve(), game.resolve(), probe.resolve()
@@ -65,6 +65,7 @@ def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False):
     settings.update(cheat_health='1', display_mode='windowed', mouse_lock='0',
                     upscaler='none', jitter='0', object_motion='0', reactive='0',
                     fsr1='0', rcas='0', restart_unconfirmed='0')
+    settings.update(render_resolution=resolution,display_mode='fullscreen' if fullscreen else 'windowed')
     config = session / 'runtime/spartanport.ini'
     config.write_text(''.join(f'{k}={v}\n' for k, v in settings.items()), encoding='utf-8')
     user = session / 'runtime/user'
@@ -95,6 +96,7 @@ def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False):
     if pixels:
         (session / 'pixels').mkdir()
         variables.update(SPARTAN_GOW3_PIXELS='1', SPARTAN_GOW3_PIXEL_DIR=str(session / 'pixels'))
+    if fullscreen and resolution=='1440p': variables['SPARTAN_FULLSCREEN_SIZE']='2560x1440'
     if motion:
         variables['SPARTAN_GOW3_MOTION']='1'
     dlss_files={}
@@ -130,9 +132,11 @@ def main():
     parser.add_argument('--wait', action='store_true', help='Keep the launcher alive until the isolated game exits')
     parser.add_argument('--pixels', action='store_true', help='Extract two real MSAA color/depth intervals with the first metadata trigger')
     parser.add_argument('--motion', action='store_true', help='Opt-in GoW3 GPU vertex-history diagnostic; DLAA stays off')
-    parser.add_argument('--dlaa', action='store_true', help='Native GoW3 DLAA experiment; starts off, enable with session/dlaa.switch')
+    parser.add_argument('--dlaa', action='store_true', help='Native GoW3 DLAA experiment; starts off, toggle with F10 or session/dlaa.switch')
+    parser.add_argument('--resolution',choices=['native','1440p'],default='native')
+    parser.add_argument('--fullscreen',action='store_true')
     args = parser.parse_args()
-    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, args.pixels, args.motion,args.dlaa)
+    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, args.pixels, args.motion,args.dlaa,args.resolution,args.fullscreen)
     if args.launch:
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(('SPARTAN_', 'GOW3_'))}
         env.update(manifest['environment'])
