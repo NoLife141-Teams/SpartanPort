@@ -443,6 +443,13 @@ void ImageTab() {
         ImGui::EndDisabled();
         ImGui::EndTable();
     }
+    auto& dlaa=Vulkan::Gow3::NativeDlaaControl();
+    if(dlaa.available.load()) {
+        Separator("DLAA");
+        int amount=int(dlaa.sharpness_percent.load());
+        if(ImGui::SliderInt("Netteté DLAA",&amount,0,100,"%d %%")) dlaa.sharpness_percent=amount;
+        Help("Applied after DLAA, before the game's HUD. Shift+F10 cycles 0, 20 and 40 percent. Session only.");
+    }
     Separator("Textures (applied on restart)");
     if (BeginRows("##textures")) {
         static const char* const anisotropy_labels[] = {"Game default", "2x", "4x", "8x", "16x"};
@@ -1624,8 +1631,11 @@ bool HandleEvent(const SDL_Event& event) {
         if(event.key.key==SDLK_F10 && !is_open && !text_entry_active &&
            Vulkan::Gow3::NativeDlaaControl().available.load()) {
             SDL_Window* focus=SDL_GetKeyboardFocus();
-            if(down && !event.key.repeat && focus && SDL_GetWindowID(focus)==event.key.windowID)
-                Vulkan::Gow3::NativeDlaaControl().Toggle();
+            if(down && !event.key.repeat && focus && SDL_GetWindowID(focus)==event.key.windowID) {
+                auto& control=Vulkan::Gow3::NativeDlaaControl();
+                if(event.key.mod&SDL_KMOD_SHIFT) control.CycleSharpness();
+                else control.Toggle();
+            }
             return true;
         }
         if (event.key.key == SDLK_F12) {
@@ -1862,8 +1872,8 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
         const char* label=state==DlaaState::Active?"DLAA ACTIF":state==DlaaState::Off?"DLAA DÉSACTIVÉ":
             state==DlaaState::Waiting?"DLAA EN ATTENTE":state==DlaaState::Failed?"DLAA ERREUR":"DLAA INDISPONIBLE";
         const auto* viewport=ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x+16*base_scale,
-            viewport->WorkPos.y+viewport->WorkSize.y-16*base_scale),ImGuiCond_Always,ImVec2(0,1));
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x+viewport->WorkSize.x-16*base_scale,
+            viewport->WorkPos.y+16*base_scale),ImGuiCond_Always,ImVec2(1,0));
         ImGui::SetNextWindowBgAlpha(.78f);
         ImGui::Begin("##gow3-dlaa-status",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoDecoration|
             ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing);
@@ -1871,7 +1881,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
             state==DlaaState::Off?ImVec4(.85f,.85f,.85f,1):ImVec4(1,.8f,.25f,1);
         ImGui::TextColored(color,"%s",label);
         ImGui::SameLine();
-        if(state==DlaaState::Active) ImGui::Text("| %u x %u | F10",control.width.load(),control.height.load());
+        if(state==DlaaState::Active) ImGui::Text("| %u x %u | Netteté %u %% | F10 / Maj+F10",control.width.load(),control.height.load(),control.sharpness_percent.load());
         else ImGui::TextUnformatted("| F10");
         ImGui::End();
     }

@@ -93,10 +93,13 @@ out/pyenv/Scripts/python.exe -B scripts/gow3_diagnostic_session.py `
 Le script annonce un nouveau dossier de session. Charger la sauvegarde avec
 S, Espace, puis Entrée dans le dialogue. Le DLAA démarre désactivé pour permettre
 une référence visuelle. **F10** active/désactive le DLAA en jeu ; le badge permanent
-en bas à gauche affiche vert « DLAA ACTIF » et la résolution, gris « DÉSACTIVÉ »,
+en haut à droite affiche vert « DLAA ACTIF » et la résolution, gris « DÉSACTIVÉ »,
 ou ambre « EN ATTENTE », « ERREUR » ou « INDISPONIBLE ». Une demande clavier ne
 publie pas à elle seule l'état actif : une évaluation NGX réussie est nécessaire.
 Le raccourci ignore les répétitions et ne bascule pas pendant les dialogues du port.
+**Maj+F10** fait défiler la netteté 0 / 20 / 40 %. Un curseur de session 0–100 %
+est ajouté au menu Image. L'accentuation RCAS utilise une copie séparée après NGX,
+avant le HUD, sans accentuer l'historique. Voir [les essais natifs 1080p](gow3-dlaa-1080p-sharpness.md).
 Il est disponible dans ce chemin expérimental, lancé avec `--dlaa`.
 Écrire `on` / `off` dans `dlaa.switch` reste possible ; F10 met aussi ce fichier
 à jour. La transition prend effet à la composition suivante. Sans chemin de commutation,

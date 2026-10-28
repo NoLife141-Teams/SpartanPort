@@ -8,6 +8,8 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/host_shaders/gow3_dlaa_prepare_comp.h"
 #include "video_core/host_shaders/gow3_dlaa_expand_comp.h"
+#include "video_core/host_shaders/gow3_dlaa_sharpen_comp.h"
+#include "video_core/host_shaders/gow3_dlaa_preview_comp.h"
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -41,6 +43,9 @@ struct Gow3Dlaa::Impl {
     std::filesystem::path dump_directory;
     std::unique_ptr<VideoCore::Buffer> readback;
     bool dump_issued{};
+    u32 sharpness_percent{},sequence_count{};
+    u64 sequence_start{};
+    bool sequence_started{};
     std::chrono::steady_clock::time_point last_evaluation{};
     std::array<float,2> jitter{};
     struct Owned {
@@ -49,11 +54,12 @@ struct Gow3Dlaa::Impl {
         vk::Format format{};
     };
     // Resolved color, nearest sample depth, motion in pixels, NGX output,
-    // and the two-sample replacement consumed by the guest composition.
-    std::array<Owned,5> images;
-    vk::UniqueDescriptorSetLayout prepare_desc,expand_desc;
-    vk::UniquePipelineLayout prepare_layout,expand_layout;
-    vk::UniquePipeline prepare,expand;
+    // the two-sample replacement consumed by the guest composition, the separate
+    // sharpened presentation copy and a diagnostic-only low-strength snapshot.
+    std::array<Owned,7> images;
+    vk::UniqueDescriptorSetLayout prepare_desc,expand_desc,sharpen_desc,preview_desc;
+    vk::UniquePipelineLayout prepare_layout,expand_layout,sharpen_layout,preview_layout;
+    vk::UniquePipeline prepare,expand,sharpen,preview;
 
     Impl(const Instance& i,Scheduler& s):instance(i),scheduler(s) {}
     void Phase() { const auto n=frame%8+1; jitter={Halton(n,2)-.5f,Halton(n,3)-.5f}; }
@@ -71,26 +77,33 @@ struct Gow3Dlaa::Impl {
         if(active!=next) { active=next; reset=true; std::printf("GoW3 DLAA: switch=%s scene=%llu\n",active?"on":"off",(unsigned long long)frame); }
         ui.requested=active;
         if(!active) ui.state=Gow3::DlaaState::Off;
+        const auto amount=std::min(ui.sharpness_percent.load(),100u);
+        if(amount!=sharpness_percent) {
+            sharpness_percent=amount;
+            std::printf("GoW3 DLAA: sharpness=%u%% scene=%llu history-retained\n",amount,(unsigned long long)frame);
+        }
     }
     void Create() {
         const auto device=instance.GetDevice();
         constexpr std::array formats{vk::Format::eR16G16B16A16Sfloat,vk::Format::eR32Sfloat,
-            vk::Format::eR16G16Sfloat,vk::Format::eR16G16B16A16Sfloat,vk::Format::eR16G16B16A16Sfloat};
+            vk::Format::eR16G16Sfloat,vk::Format::eR16G16B16A16Sfloat,vk::Format::eR16G16B16A16Sfloat,
+            vk::Format::eR16G16B16A16Sfloat,vk::Format::eR16G16B16A16Sfloat};
         for(u32 n=0;n<images.size();++n) {
             auto& item=images[n]; item.format=formats[n];
             item.image=VideoCore::UniqueImage(device,instance.GetAllocator());
             item.image.Create({.imageType=vk::ImageType::e2D,.format=item.format,.extent={width,height,1},
                 .mipLevels=1,.arrayLayers=1,.samples=n==4?vk::SampleCountFlagBits::e2:vk::SampleCountFlagBits::e1,
                 .tiling=vk::ImageTiling::eOptimal,
-                .usage=vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc,
+                .usage=vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst,
                 .initialLayout=vk::ImageLayout::eUndefined});
             item.view=Check(device.createImageViewUnique({.image=vk::Image(item.image),.viewType=vk::ImageViewType::e2D,
                 .format=item.format,.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1}}));
         }
-        const auto layout=[&](u32 sampled,u32 stored,vk::UniqueDescriptorSetLayout& desc,u32 push) {
+        const auto layout=[&](u32 sampled,u32 stored,vk::UniqueDescriptorSetLayout& desc,u32 push,bool buffer=false) {
             std::vector<vk::DescriptorSetLayoutBinding> bindings;
             for(u32 n=0;n<sampled+stored;++n) bindings.push_back({.binding=n,
-                .descriptorType=n<sampled?vk::DescriptorType::eSampledImage:vk::DescriptorType::eStorageImage,
+                .descriptorType=buffer&&n==sampled+stored-1?vk::DescriptorType::eStorageBuffer:
+                    n<sampled?vk::DescriptorType::eSampledImage:vk::DescriptorType::eStorageImage,
                 .descriptorCount=1,.stageFlags=vk::ShaderStageFlagBits::eCompute});
             desc=Check(device.createDescriptorSetLayoutUnique({.flags=vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
                 .bindingCount=u32(bindings.size()),.pBindings=bindings.data()}));
@@ -100,6 +113,8 @@ struct Gow3Dlaa::Impl {
         };
         prepare_layout=layout(3,3,prepare_desc,sizeof(PrepareParams));
         expand_layout=layout(2,1,expand_desc,0);
+        sharpen_layout=layout(0,2,sharpen_desc,sizeof(float));
+        preview_layout=layout(0,4,preview_desc,0,true);
         const auto pipeline=[&](std::span<const u32> spirv,vk::PipelineLayout l) {
             auto module=Check(device.createShaderModuleUnique({.codeSize=spirv.size_bytes(),.pCode=spirv.data()}));
             return Check(device.createComputePipelineUnique({}, {.stage={.stage=vk::ShaderStageFlagBits::eCompute,
@@ -107,6 +122,8 @@ struct Gow3Dlaa::Impl {
         };
         prepare=pipeline(GOW3_DLAA_PREPARE_COMP,*prepare_layout);
         expand=pipeline(GOW3_DLAA_EXPAND_COMP,*expand_layout);
+        sharpen=pipeline(GOW3_DLAA_SHARPEN_COMP,*sharpen_layout);
+        preview=pipeline(GOW3_DLAA_PREVIEW_COMP,*preview_layout);
         initialized=true;
     }
     static void Barrier(vk::CommandBuffer cmd) {
@@ -119,16 +136,82 @@ struct Gow3Dlaa::Impl {
     Dlss::Resource Resource(u32 index) {
         auto& i=images[index];return {vk::Image(i.image),*i.view,i.format,vk::ImageAspectFlagBits::eColor,width,height};
     }
+    void Sharpen(vk::CommandBuffer cmd,float amount) {
+        const vk::DescriptorImageInfo info[]{
+            {.imageView=*images[3].view,.imageLayout=vk::ImageLayout::eGeneral},
+            {.imageView=*images[5].view,.imageLayout=vk::ImageLayout::eGeneral}};
+        std::array<vk::WriteDescriptorSet,2> writes{};
+        for(u32 n=0;n<2;++n) writes[n]={.dstBinding=n,.descriptorCount=1,
+            .descriptorType=vk::DescriptorType::eStorageImage,.pImageInfo=&info[n]};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute,*sharpen);
+        cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,*sharpen_layout,0,writes);
+        cmd.pushConstants(*sharpen_layout,vk::ShaderStageFlagBits::eCompute,0,sizeof(amount),&amount);
+        cmd.dispatch((width+7)/8,(height+7)/8,1);Barrier(cmd);
+    }
+    void Sequence(vk::CommandBuffer cmd) {
+        if(dump_directory.empty()||evaluated<32||sequence_count==16) return;
+        const auto directory=dump_directory/"sequence";
+        if(!sequence_started) {
+            if(!std::filesystem::is_regular_file(dump_directory/"sequence.trigger")) return;
+            sequence_started=true;sequence_start=frame;
+            std::error_code error;
+            if(!std::filesystem::create_directory(directory,error)) {sequence_count=16;return;}
+        }
+        if(frame<sequence_start+sequence_count*8) return;
+        Sharpen(cmd,.2f);
+        const vk::ImageCopy region{.srcSubresource={vk::ImageAspectFlagBits::eColor,0,0,1},
+            .dstSubresource={vk::ImageAspectFlagBits::eColor,0,0,1},.extent={width,height,1}};
+        cmd.copyImage(vk::Image(images[5].image),vk::ImageLayout::eGeneral,
+            vk::Image(images[6].image),vk::ImageLayout::eGeneral,region);Barrier(cmd);
+        Sharpen(cmd,.4f);
+        const u32 w=width/2,h=height/2;
+        const u64 bytes=u64(w)*h*4;
+        auto buffer=std::make_shared<VideoCore::Buffer>(instance,0,bytes*3,VideoCore::MemoryType::HostCached,"GoW3 sharpness sequence");
+        const vk::DescriptorImageInfo info[]{
+            {.imageView=*images[3].view,.imageLayout=vk::ImageLayout::eGeneral},
+            {.imageView=*images[6].view,.imageLayout=vk::ImageLayout::eGeneral},
+            {.imageView=*images[5].view,.imageLayout=vk::ImageLayout::eGeneral}};
+        const vk::DescriptorBufferInfo output{buffer->Handle(),0,bytes*3};
+        std::array<vk::WriteDescriptorSet,4> writes{};
+        for(u32 n=0;n<3;++n) writes[n]={.dstBinding=n,.descriptorCount=1,
+            .descriptorType=vk::DescriptorType::eStorageImage,.pImageInfo=&info[n]};
+        writes[3]={.dstBinding=3,.descriptorCount=1,.descriptorType=vk::DescriptorType::eStorageBuffer,.pBufferInfo=&output};
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute,*preview);
+        cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,*preview_layout,0,writes);
+        cmd.dispatch((w+7)/8,(h+7)/8,1);
+        const vk::MemoryBarrier2 host{.srcStageMask=vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask=vk::AccessFlagBits2::eShaderWrite,.dstStageMask=vk::PipelineStageFlagBits2::eHost,.dstAccessMask=vk::AccessFlagBits2::eHostRead};
+        cmd.pipelineBarrier2({.memoryBarrierCount=1,.pMemoryBarriers=&host});
+        const auto tick=scheduler.CurrentTick(),scene=frame;
+        const auto index=sequence_count++;
+        scheduler.DeferOperation([buffer,directory,bytes,w,h,tick,scene,index] {
+            buffer->Invalidate(0,bytes*3);bool ok=true;
+            for(u32 n=0;n<3;++n) {
+                const auto stem=std::to_string(index)+"_"+std::to_string(n);
+                auto* f=std::fopen((directory/(stem+".rgba8")).string().c_str(),"wbx");
+                if(!f){ok=false;continue;}
+                const bool written=std::fwrite(buffer->mapped_data.data()+n*bytes,1,bytes,f)==bytes;
+                const bool closed=std::fclose(f)==0;ok &= written&&closed;
+            }
+            auto* f=std::fopen((directory/(std::to_string(index)+".json")).string().c_str(),"wbx");
+            if(f) {std::fprintf(f,"{\"gpu_complete\":true,\"complete\":%s,\"tick\":%llu,\"scene\":%llu,\"width\":%u,\"height\":%u,\"sharpness\":[0,20,40]}\n",
+                ok?"true":"false",(unsigned long long)tick,(unsigned long long)scene,w,h);std::fclose(f);}
+            std::printf("GoW3 DLAA: sequence=%u scene=%llu gpu-complete=%u\n",index,(unsigned long long)scene,ok);
+        });
+        Barrier(cmd);
+    }
     void Dump(vk::CommandBuffer cmd) {
         if(dump_directory.empty() || dump_issued || evaluated<32 ||
            !std::filesystem::is_regular_file(dump_directory/"capture.trigger")) return;
         dump_issued=true;
         const u64 bytes=u64(width)*height*8;
-        readback=std::make_unique<VideoCore::Buffer>(instance,0,bytes*2,VideoCore::MemoryType::HostCached,"GoW3 DLAA proof");
-        for(u32 n=0;n<2;++n) {
+        readback=std::make_unique<VideoCore::Buffer>(instance,0,bytes*4,VideoCore::MemoryType::HostCached,"GoW3 DLAA proof");
+        for(u32 n=0;n<4;++n) {
+            if(n>=2) Sharpen(cmd,n==2?.2f:.4f);
             const vk::BufferImageCopy region{.bufferOffset=n*bytes,
                 .imageSubresource={vk::ImageAspectFlagBits::eColor,0,0,1},.imageExtent={width,height,1}};
-            cmd.copyImageToBuffer(vk::Image(images[n?3:0].image),vk::ImageLayout::eGeneral,readback->Handle(),region);
+            cmd.copyImageToBuffer(vk::Image(images[n>=2?5:n?3:0].image),vk::ImageLayout::eGeneral,readback->Handle(),region);
+            Barrier(cmd);
         }
         const vk::MemoryBarrier2 b{.srcStageMask=vk::PipelineStageFlagBits2::eTransfer,
             .srcAccessMask=vk::AccessFlagBits2::eTransferWrite,.dstStageMask=vk::PipelineStageFlagBits2::eHost,
@@ -136,10 +219,11 @@ struct Gow3Dlaa::Impl {
         cmd.pipelineBarrier2({.memoryBarrierCount=1,.pMemoryBarriers=&b});
         const auto tick=scheduler.CurrentTick(),scene=frame,count=evaluated+1;
         scheduler.DeferOperation([this,tick,scene,count,bytes,width=width,height=height] {
-            readback->Invalidate(0,bytes*2);
+            readback->Invalidate(0,bytes*4);
             bool ok=true;
-            for(u32 n=0;n<2;++n) {
-                auto* f=std::fopen((dump_directory/(n?"output.rgba16f":"input.rgba16f")).string().c_str(),"wbx");
+            const char* names[]{"input.rgba16f","output.rgba16f","low.rgba16f","medium.rgba16f"};
+            for(u32 n=0;n<4;++n) {
+                auto* f=std::fopen((dump_directory/names[n]).string().c_str(),"wbx");
                 if(!f) {ok=false;continue;}
                 const bool written=std::fwrite(readback->mapped_data.data()+n*bytes,1,bytes,f)==bytes;
                 const bool closed=std::fclose(f)==0;ok &= written&&closed;
@@ -264,9 +348,13 @@ vk::ImageView Gow3Dlaa::Process(vk::ImageView depth,vk::ImageLayout depth_layout
         std::puts("GoW3 DLAA: NGX failed; native input retained");return {}; }
     Impl::Barrier(cmd);
     p.Dump(cmd);
+    p.Sequence(cmd);
     Impl::Barrier(cmd);
+    // Sharpen only the presentation copy. NGX history and game HUD are untouched.
+    const bool sharpened=p.sharpness_percent!=0;
+    if(sharpened) p.Sharpen(cmd,float(p.sharpness_percent)/100.f);
     const vk::DescriptorImageInfo expanded[]{
-        {.imageView=*p.images[3].view,.imageLayout=vk::ImageLayout::eGeneral},
+        {.imageView=*p.images[sharpened?5:3].view,.imageLayout=vk::ImageLayout::eGeneral},
         {.imageView=*p.images[0].view,.imageLayout=vk::ImageLayout::eGeneral},
         {.imageView=*p.images[4].view,.imageLayout=vk::ImageLayout::eGeneral}};
     dispatch(*p.expand,*p.expand_layout,expanded,2);
