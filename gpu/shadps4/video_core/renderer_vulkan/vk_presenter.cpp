@@ -441,7 +441,8 @@ void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
     frame->format = format;
 }
 
-Frame* Presenter::PrepareLastFrame() {
+Frame* Presenter::PrepareLastFrame(Gow3::Trace::Flip* trace) {
+    if (trace) *trace = presentation_trace.ReuseSource();
     if (last_submit_frame == nullptr) {
         return nullptr;
     }
@@ -844,7 +845,15 @@ void Presenter::PresentLoadingFrame() {
     present_scheduler.Finish();
 }
 
-void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
+void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
+                        Gow3::Trace::Flip trace) {
+    const auto trace_result = [&](Gow3::Trace::Result result) {
+        const auto event = presentation_trace.Complete(trace, is_reusing_frame, result);
+        if (trace.id) {
+            Gow3::Trace::Write(event);
+            Gow3::Trace::Flush();
+        }
+    };
     // Free the frame for reuse
     const auto free_frame = [&] {
         if (!is_reusing_frame) {
@@ -858,6 +867,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     // spartanport: a minimized window has no pixels on Windows (0x0) or is hidden/occluded; keep the swapchain
     // and skip presenting until the window is restored.
     if (window.IsMinimized() || window.GetWidth() <= 0 || window.GetHeight() <= 0) {
+        trace_result(Gow3::Trace::Result::Minimized);
         free_frame();
         return;
     }
@@ -875,6 +885,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         if (!swapchain.AcquireNextImage()) {
             // User resizes the window too fast and GPU can't keep up. Skip this frame.
             LOG_WARNING(Render_Vulkan, "Skipping frame!");
+            trace_result(Gow3::Trace::Result::AcquireFailed);
             free_frame();
             return;
         }
@@ -1009,14 +1020,17 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     scheduler.Flush(info);
 
     // Present to swapchain.
+    bool presented;
     {
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
-        if (!swapchain.Present() && !window.IsMinimized() && window.GetWidth() > 0 &&
+        presented = swapchain.Present();
+        if (!presented && !window.IsMinimized() && window.GetWidth() > 0 &&
             window.GetHeight() > 0) {
             swapchain.Recreate(window.GetWidth(), window.GetHeight());
         }
     }
 
+    trace_result(!presented ? Gow3::Trace::Result::PresentFailed : Gow3::Trace::Result::Presented);
     free_frame();
     if (!is_reusing_frame && is_game_frame) {
         DebugState.IncFlipFrameNum();

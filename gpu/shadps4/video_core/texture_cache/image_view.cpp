@@ -165,6 +165,8 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
     ASSERT_MSG(view_result == vk::Result::eSuccess, "Failed to create image view: {}",
                vk::to_string(view_result));
     image_view = std::move(view);
+    created_format = image_view_ci.format;
+    created_aspects = image_view_ci.subresourceRange.aspectMask;
 
     const auto view_aspect = aspect & vk::ImageAspectFlagBits::eDepth     ? "Depth"
                              : aspect & vk::ImageAspectFlagBits::eStencil ? "Stencil"

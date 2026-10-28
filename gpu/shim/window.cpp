@@ -10,6 +10,7 @@
 #include "spartanport_overlay.h"
 #include "spartanport_graphics.h"
 #include "spartanport_settings.h"
+#include "../../src/keyboard_trace_bridge.h"
 
 namespace Frontend {
 
@@ -185,6 +186,14 @@ void WindowSDL::UpdateTextTitle() {
 }
 
 bool WindowSDL::PollEvents() {
+    // This observes only this window and S. It never consumes or changes an event.
+    const auto key_trace_context = [this] {
+        return (SDL_GetKeyboardFocus() == window ? KT_FOCUS : 0u) |
+               (SpartanOverlay::CapturesInput() ? KT_CAPTURE : 0u) |
+               (text_active ? KT_TEXT : 0u);
+    };
+    if (spartanport_key_trace_enabled())
+        spartanport_key_trace_window(SDL_GetWindowID(window), key_trace_context(), 1);
     {
         std::scoped_lock lock{text_mutex};
         if (text_requested) { // SDL text input must be toggled from the window thread
@@ -202,6 +211,12 @@ bool WindowSDL::PollEvents() {
     }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        if (spartanport_key_trace_enabled() &&
+            (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
+            event.key.scancode == SDL_SCANCODE_S) {
+            spartanport_key_trace_s(event.key.windowID, key_trace_context(),
+                                   event.type == SDL_EVENT_KEY_DOWN, event.key.repeat);
+        }
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
             if (event.type == SDL_EVENT_TEXT_INPUT) {
@@ -296,6 +311,10 @@ bool WindowSDL::PollEvents() {
     if (const bool show = paused && !mouse_locked; show != cursor_shown) {
         show ? SDL_ShowCursor() : SDL_HideCursor();
         cursor_shown = show;
+    }
+    if (spartanport_key_trace_enabled()) {
+        spartanport_key_trace_window(SDL_GetWindowID(window), key_trace_context(), 0);
+        spartanport_key_trace_tick();
     }
     return is_open;
 }

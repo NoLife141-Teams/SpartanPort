@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <bit>
 #include <xxhash.h>
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "spartanport_toggles.h"
@@ -51,6 +55,30 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
       pipeline_cache{instance, scheduler, liverpool, buffer_cache.GetSparsePageShift()},
       host_markers_enabled{EmulatorSettings.IsVkHostMarkersEnabled()},
       guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()} {
+    gow3_inputs_enabled = Gow3::InputDiagnosticsEnabled();
+    gow3_trace_enabled = gow3_inputs_enabled && Gow3::Trace::Enabled();
+    if (Gow3::Pair::Requested(std::getenv("SPARTAN_GOW3_INPUT_DIAGNOSTICS"),
+                              std::getenv("SPARTAN_GOW3_PAIR_METADATA"))) {
+        const auto* path = std::getenv("SPARTAN_GOW3_PAIR_FILE");
+        const auto* trigger = std::getenv("SPARTAN_GOW3_PAIR_TRIGGER");
+        const bool shader_details=Gow3::Pair::ShaderRequested(
+            std::getenv("SPARTAN_GOW3_INPUT_DIAGNOSTICS"),std::getenv("SPARTAN_GOW3_PAIR_METADATA"),
+            std::getenv("SPARTAN_GOW3_SHADER_METADATA"));
+        const bool grouped=Gow3::Pair::GroupRequested(
+            std::getenv("SPARTAN_GOW3_INPUT_DIAGNOSTICS"),std::getenv("SPARTAN_GOW3_PAIR_METADATA"),
+            std::getenv("SPARTAN_GOW3_SHADER_METADATA"),std::getenv("SPARTAN_GOW3_GROUP_METADATA"));
+        gow3_pair = std::make_unique<Gow3::Pair::Capture>(true, path ? path : "", trigger ? trigger : "",
+                                                        Gow3::Pair::Capture::Capacity,shader_details,grouped,
+                                                        Gow3::Pair::Capture::ByteCapacity,
+                                                        Gow3::Provenance::Requested(std::getenv("SPARTAN_GOW3_PROVENANCE")));
+        gow3_provenance_enabled=gow3_pair->Enabled() && gow3_pair->ProvenanceEnabled();
+        if(gow3_provenance_enabled) texture_cache.EnableProvenance();
+        std::printf("GoW3 pair metadata: %s; no pixels or proven pre-UI color\n",
+                    gow3_pair->Enabled() ? "armed" : "disabled: invalid paths");
+    }
+    if (gow3_inputs_enabled) {
+        std::printf("GoW3 inputs: diagnostic only; DLAA disabled, stable ring snapshots required\n");
+    }
     // Before the rasterizer is bound: Liverpool enqueues buffers only once it sees it.
     draw_prep = std::make_unique<DrawPreparation>(pipeline_cache);
     scene_targets = std::make_unique<SceneTargets>(instance, scheduler, runtime, texture_cache);
@@ -230,6 +258,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
 
     const bool skip_cb_binding =
         regs.color_control.mode == AmdGpu::ColorControl::OperationMode::Disable;
+    u32 bound_color_mask = 0;
     for (s32 cb = 0; cb < std::bit_width(key.mrt_mask); ++cb) {
         auto& [image_id, desc] = cb_descs[cb];
         const auto& col_buf = regs.color_buffers[cb];
@@ -245,6 +274,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
             col_buf, hint));
         auto& image = texture_cache.GetImage(image_id);
         image.binding.is_target = 1u;
+        bound_color_mask |= 1u << cb;
     }
 
     if (GetEffectiveDepthStencilState(regs).needs_attachment) {
@@ -264,8 +294,47 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     } else {
         db_desc.first = {};
     }
-    // spartanport: the G-buffer pass (5+ color targets) holds the scene depth, and its constants the
-    // main camera (shadow passes bind the same layout with the light's camera).
+    // GoW3 depth passes can export color in the shader with no color target bound.
+    if (gow3_pair && gow3_pair->Enabled()) {
+        const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        const auto vs = pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash;
+        gow3_pair->Begin(vs, ps ? ps->pgm_hash : 0);
+        if(gow3_provenance_enabled)
+            gow3_pair->ProvenanceEvents(texture_cache.DrainProvenance(),"before_bindings");
+        if (auto* row = gow3_pair->Pending()) {
+            if(row->grouped_details) {
+                row->vs_key=key.stage_hashes[u32(Shader::SwStage::Vertex)];
+                row->ps_key=key.stage_hashes[u32(Shader::SwStage::Fragment)];
+                row->primitive_key=u32(key.prim_type); row->logic_key=u32(key.logic_op);
+                for(size_t i=0;i<row->write_masks.size();++i) {
+                    row->write_masks[i]=u32(key.write_masks[i]);
+                    row->blend_key_bits[i]=std::bit_cast<u32>(key.blend_controls[i]);
+                }
+            }
+            row->exports=key.mrt_mask; row->bound=bound_color_mask;
+            row->clip_space=u32(regs.clipper_control.clip_space);
+            row->clip_disabled=regs.IsClipDisabled(); row->raster_samples=key.num_samples;
+            row->guest_depth_samples=db_desc.first ? regs.depth_buffer.NumSamples() : 0;
+            row->legacy_ui_hint=UiComposition::MovieShader(vs);
+        }
+        if(auto* s=gow3_pair->Shader()) {
+            s->vs_key=key.stage_hashes[u32(Shader::SwStage::Vertex)];
+            s->ps_key=key.stage_hashes[u32(Shader::SwStage::Fragment)];
+            s->native_clip_control=instance.IsDepthClipControlSupported();
+            s->depth_clip_feature=instance.IsDepthClipEnableSupported();
+            s->unrestricted_range=instance.IsDepthRangeUnrestrictedSupported();
+            s->depth_clamp_key=key.depth_clamp_enable; s->depth_clip_key=key.depth_clip_enable;
+        }
+    }
+    gow3_depth_draw = gow3_inputs_enabled && Gow3::IsDepthOnlyDraw(
+        key.mrt_mask, bound_color_mask, bool(db_desc.first),
+        regs.depth_control.depth_enable, regs.depth_control.depth_write_enable);
+    if (gow3_trace_enabled) {
+        gow3_trace.Draw(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash == Gow3::DepthShader,
+                        gow3_depth_draw);
+    }
+    Gow3DisplayTransition(key.mrt_mask, bound_color_mask);
+    // Legacy G-buffer constants describe the main camera (not shadow passes).
     gbuffer_draw = camera_motion->Enabled() && std::popcount(key.mrt_mask) >= 5 && db_desc.first;
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
@@ -366,8 +435,9 @@ struct PacketStage {
     u32 ud_size;
     u32 flat_size;
     u32 num_ring;
-    u32 pad;
+    u32 camera_snapshot_reason; ///< diagnostic only; reuses the reserved word
 };
+static_assert(sizeof(PacketStage) == 32); // diagnostic metadata does not enlarge packets
 constexpr u32 AlignPacket(u32 size) {
     return (size + 7) & ~7u;
 }
@@ -488,7 +558,13 @@ bool Rasterizer::PendingWriteOverlaps(VAddr address, u64 size) {
 }
 
 void Rasterizer::CollectRingBindings(const Shader::Info& stage, const PreparedDraw* prepared,
-                           boost::container::static_vector<RingBinding, Shader::NUM_BUFFERS>& out) {
+                           boost::container::static_vector<RingBinding, Shader::NUM_BUFFERS>& out,
+                           Gow3::SnapshotReason& camera_reason) {
+    const bool camera = gow3_inputs_enabled && stage.sw_stage == Shader::SwStage::Vertex &&
+                        stage.pgm_hash == Gow3::DepthShader;
+    const auto note = [&](u32 index, Gow3::SnapshotReason reason) {
+        if (camera && index == 1) camera_reason = reason;
+    };
     const PreparedStage* prepared_stage = nullptr;
     if (prepared && !SpartanToggle::Disabled(SpartanToggle::PreparedResources)) {
         for (u32 i = 0; i < prepared->num_stages; ++i) {
@@ -505,6 +581,7 @@ void Rasterizer::CollectRingBindings(const Shader::Info& stage, const PreparedDr
     const auto copy = [&](u32 index, const void* source, VAddr address, u64 size) {
         const auto offset = constant_ring->Allocate(size, alignment);
         if (!offset) {
+            note(index, Gow3::SnapshotReason::AllocationFailed);
             return;
         }
         u8* dst = constant_ring->Data(*offset);
@@ -515,6 +592,7 @@ void Rasterizer::CollectRingBindings(const Shader::Info& stage, const PreparedDr
         }
         constant_ring->Flush(*offset, size);
         out.push_back({index, static_cast<u32>(size), *offset, address});
+        note(index, Gow3::SnapshotReason::Copied);
     };
     for (u32 index = 0; index < stage.buffers.size(); ++index) {
         const auto& desc = stage.buffers[index];
@@ -530,17 +608,33 @@ void Rasterizer::CollectRingBindings(const Shader::Info& stage, const PreparedDr
                                            : desc.GetSharp(stage);
         const VAddr address = vsharp.base_address;
         if (address == 0 || vsharp.GetSize() == 0) {
+            note(index, Gow3::SnapshotReason::EmptySource);
             continue;
         }
         const u64 size = memory->ClampRangeSize(address, vsharp.GetSize());
         if (desc.is_written) {
             NotePendingGpuWrite(address, size);
+            note(index, Gow3::SnapshotReason::Writable);
             continue;
         }
         // The stream path of BufferCache::ObtainBuffer, taken here: small, read-only, not
         // written by the GPU (now or by work still queued for the recording thread).
-        if (size == 0 || size > VideoCore::BufferCache::STREAM_THRESHOLD ||
-            buffer_cache.IsRegionGpuModified(address, size) || PendingWriteOverlaps(address, size)) {
+        // Keep the original short-circuit order and query count. Record only
+        // the rejection already encountered; do not inspect guest memory again.
+        if (size == 0) {
+            note(index, Gow3::SnapshotReason::EmptyRange);
+            continue;
+        }
+        if (size > VideoCore::BufferCache::STREAM_THRESHOLD) {
+            note(index, Gow3::SnapshotReason::TooLarge);
+            continue;
+        }
+        if (buffer_cache.IsRegionGpuModified(address, size)) {
+            note(index, Gow3::SnapshotReason::GpuModified);
+            continue;
+        }
+        if (PendingWriteOverlaps(address, size)) {
+            note(index, Gow3::SnapshotReason::PendingWrite);
             continue;
         }
         copy(index, nullptr, address, size);
@@ -579,6 +673,7 @@ void Rasterizer::PostDraw(const Pipeline* pipeline, const PreparedDraw* used_pre
     thread_local std::array<boost::container::static_vector<RingBinding, Shader::NUM_BUFFERS>,
                             Shader::MaxStageTypes>
         rings;
+    std::array<Gow3::SnapshotReason, Shader::MaxStageTypes> camera_reasons{};
     u32 num_stages = 0;
     u32 size = sizeof(DrawPacket) + AlignPacket(num_blocks * sizeof(u16)) +
                num_blocks * AmdGpu::RegDirty::BlockWords * sizeof(u32);
@@ -586,8 +681,15 @@ void Rasterizer::PostDraw(const Pipeline* pipeline, const PreparedDraw* used_pre
         if (stage) {
             auto& ring = rings[num_stages];
             ring.clear();
-            if (constant_ring && !SpartanToggle::Disabled(SpartanToggle::ConstantRing)) {
-                CollectRingBindings(*stage, used_prepared, ring);
+            auto& camera_reason = camera_reasons[num_stages];
+            const bool ring_enabled = constant_ring && !SpartanToggle::Disabled(SpartanToggle::ConstantRing);
+            if (gow3_inputs_enabled && stage->sw_stage == Shader::SwStage::Vertex &&
+                stage->pgm_hash == Gow3::DepthShader) {
+                camera_reason = !constant_ring ? Gow3::SnapshotReason::RingUnavailable :
+                    !ring_enabled ? Gow3::SnapshotReason::RingDisabled : Gow3::SnapshotReason::NoBinding;
+            }
+            if (ring_enabled) {
+                CollectRingBindings(*stage, used_prepared, ring, camera_reason);
             }
             ++num_stages;
             size += sizeof(PacketStage) +
@@ -640,14 +742,15 @@ void Rasterizer::PostDraw(const Pipeline* pipeline, const PreparedDraw* used_pre
         if (!stage) {
             continue;
         }
-        const auto& ring = rings[stage_index++];
+        const auto& ring = rings[stage_index];
+        const auto camera_reason = camera_reasons[stage_index++];
         auto& header = *reinterpret_cast<PacketStage*>(out);
         header = {stage,
                   stage->pgm_base,
                   static_cast<u32>(stage->user_data.size()),
                   static_cast<u32>(stage->flattened_ud_buf.size()),
                   static_cast<u32>(ring.size()),
-                  0};
+                  u32(camera_reason)};
         out += sizeof(PacketStage);
         std::memcpy(out, ring.data(), ring.size() * sizeof(RingBinding));
         out += ring.size() * sizeof(RingBinding);
@@ -725,7 +828,7 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
         const auto& stage = *reinterpret_cast<const PacketStage*>(in);
         in += sizeof(PacketStage);
         self.ring_stages[i] = {stage.info, reinterpret_cast<const RingBinding*>(in),
-                               stage.num_ring};
+                               stage.num_ring, Gow3::SnapshotReason(stage.camera_snapshot_reason)};
         in += stage.num_ring * sizeof(RingBinding);
         const auto* words = reinterpret_cast<const u32*>(in);
         Shader::Info::ud_snapshots[i] = {stage.info, words, stage.ud_size, words + stage.ud_size,
@@ -979,6 +1082,105 @@ void Rasterizer::DiagPassBoundary(bool force) {
     diag_addresses = force ? std::array<VAddr, 8>{} : addresses;
 }
 
+void Rasterizer::Gow3DisplayTransition(u32 color_exports, u32 bound_colors) {
+    if (gow3_trace_enabled) {
+        const bool display_target = bound_colors==1 && cb_descs[0].first &&
+            FrameCapture::IsDisplayBuffer(
+                texture_cache.GetImage(cb_descs[0].first).info.guest_address);
+        // Several display groups may belong to one accepted flip. They only
+        // describe the trace; they never reset samples or camera history.
+        if (const auto event = gow3_frames.Display(color_exports, bound_colors, display_target)) {
+            const auto* depth = db_desc.first ? &texture_cache.GetImage(db_desc.first).info : nullptr;
+            Gow3::Trace::Write(gow3_trace.Display({
+                .number=event->number,
+                .color=texture_cache.GetImage(cb_descs[0].first).info.guest_address,
+                .depth=depth ? depth->guest_address : 0,
+                .exports=color_exports, .bound=bound_colors,
+                .width=depth ? depth->size.width : 0, .height=depth ? depth->size.height : 0,
+                .samples=event->samples, .unsnapshotted=event->unsnapshotted,
+                .status=u32(event->status)}));
+        }
+    }
+}
+
+namespace {
+template<class Handle> u64 PairHandleBits(Handle handle) {
+    u64 bits{}; static_assert(sizeof(handle)<=sizeof(bits));
+    std::memcpy(&bits,&handle,sizeof(handle)); return bits;
+}
+Gow3::Pair::Attachment PairAttachment(const VideoCore::Image& image, vk::ImageView view = {}) {
+    Gow3::Pair::Attachment result;
+    result.uid=image.image_uid; result.alias_generation=image.alias_generation;
+    result.address=image.info.guest_address; result.cache_samples=image.info.num_samples;
+    result.view=PairHandleBits(VkImageView(view)); result.proxy=image.scene_proxy;
+    if (image.backing) {
+        const auto& ci=image.backing->image.image_ci;
+        result.image=PairHandleBits(VkImage(image.GetImage()));
+        result.host_samples=u32(ci.samples); result.format=u32(ci.format);
+        result.width=ci.extent.width; result.height=ci.extent.height;
+    }
+    return result;
+}
+}
+
+void Rasterizer::RecordGow3PairDraw(const RenderState& state, bool indirect, bool square) {
+    auto* row=gow3_pair ? gow3_pair->Pending() : nullptr;
+    if (!row) return;
+    row->indirect=indirect; row->extra_square_draw=square;
+    row->width=state.width; row->height=state.height;
+    row->proxy_path=upscaler->Enabled() || camera_motion->Enabled() ||
+                    target_scale[0]!=1.f || target_scale[1]!=1.f;
+    row->color_count=state.num_color_attachments;
+    if(row->provenance_details) {
+        row->provenance_bindings_lost=gow3_image_provenance.Lost();
+        for(u32 i=0;i<std::min<u32>(state.num_color_attachments,8);++i)
+            row->color_provenance[i]=texture_cache.DescribeProvenance(cb_descs[i].first,state.color_attachments[i].image_view);
+        row->depth_provenance=texture_cache.DescribeProvenance(db_desc.first,state.depth_stencil_attachment.image_view);
+        gow3_pair->ProvenanceEvents(texture_cache.DrainProvenance(),"after_recording");
+    }
+    for (u32 i=0;i<std::min<u32>(state.num_color_attachments,row->colors.size());++i) {
+        if (!cb_descs[i].first) continue;
+        row->colors[i]=PairAttachment(texture_cache.GetImage(cb_descs[i].first),state.color_attachments[i].image_view);
+        row->colors[i].mip=cb_descs[i].second.view_info.range.base.level;
+        row->colors[i].layer=cb_descs[i].second.view_info.range.base.layer;
+    }
+    if (db_desc.first && state.depth_stencil_attachment.has_depth) {
+        row->depth=PairAttachment(texture_cache.GetImage(db_desc.first),state.depth_stencil_attachment.image_view);
+        row->depth.mip=db_desc.second.view_info.range.base.level;
+        row->depth.layer=db_desc.second.view_info.range.base.layer;
+        row->depth_clear=state.depth_stencil_attachment.depth_clear;
+        if (row->depth_clear) row->depth_clear_bits=state.depth_stencil_attachment.clear_value[0];
+    }
+    const auto& regs=Regs();
+    const auto effective=GetEffectiveDepthStencilState(regs);
+    row->depth_test=effective.depth_test_enable;
+    row->depth_write=effective.depth_write_enable && !regs.depth_render_control.depth_clear_enable;
+    row->depth_compare=u32(LiverpoolToVK::CompareOp(regs.depth_control.depth_func));
+    if(row->grouped_details) {
+        // BindResources has joined its helper. Copy the actual descriptor writes
+        // on the draw consumer, before ResetBindings; no pointer is retained.
+        for(const auto& w:set_writes) {
+            if(w.descriptorType!=vk::DescriptorType::eSampledImage &&
+               w.descriptorType!=vk::DescriptorType::eStorageImage &&
+               w.descriptorType!=vk::DescriptorType::eCombinedImageSampler &&
+               w.descriptorType!=vk::DescriptorType::eInputAttachment) continue;
+            if(!w.pImageInfo) { row->image_descriptors_dropped+=w.descriptorCount; continue; }
+            for(u32 j=0;j<w.descriptorCount;++j) {
+                if(row->image_descriptor_count==row->image_descriptors.size()) {
+                    row->image_descriptors_dropped+=w.descriptorCount-j; break;
+                }
+                const auto& image=w.pImageInfo[j];
+                const auto view=PairHandleBits(VkImageView(image.imageView));
+                Gow3::Pair::ImageDescriptor descriptor{w.dstBinding,w.dstArrayElement+j,u32(w.descriptorType),u32(image.imageLayout),view};
+                if(row->provenance_details) descriptor.provenance=gow3_image_provenance.Get(
+                    row->serial,row->interval,u32(&image-image_infos.data()),view);
+                row->Image(descriptor);
+            }
+        }
+    }
+    gow3_pair->Recorded();
+}
+
 void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                             bool is_indexed, u32 index_offset) {
     if (DrawPipe::OnStageB()) {
@@ -1176,6 +1378,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             draw();
         }
     });
+    RecordGow3PairDraw(state, false, bool(square));
     if (FrameCapture::Active()) {
         const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
         FrameCapture::Draw(vs_info.pgm_hash, ps ? ps->pgm_hash : 0, num_indices, num_instances);
@@ -1314,6 +1517,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
             }
         }
     });
+    RecordGow3PairDraw(state, true, bool(square));
     DebugState.IncDrawCall();
 
     ResetBindings(false);
@@ -1494,6 +1698,65 @@ void Rasterizer::OnSubmit() {
     runtime.TickFrame();
 }
 
+Gow3::Flip Rasterizer::AcceptGow3Flip(u64 address, s32 buffer, bool eop) {
+    if (!gow3_inputs_enabled) return {};
+    const auto flip = gow3_flips.Accepted(address, buffer, eop);
+    // EOP callbacks run synchronously at SignalFlip, already in draw order.
+    // Non-EOP VideoOut commands run on stage A: copy their explicit token into
+    // the existing task queue rather than sampling another thread's counters.
+    switch (Gow3::RouteFlip(OnStageA(), DrawPipe::OnStageB())) {
+    case Gow3::FlipRoute::OrderedTask:
+        RunInOrder([](Rasterizer& self, const u8* data) {
+            Gow3::Trace::Flip token;
+            std::memcpy(&token, data, sizeof(token));
+            self.FinishGow3Flip(token);
+        }, &flip, sizeof(flip), 0);
+        break;
+    case Gow3::FlipRoute::Consume:
+        FinishGow3Flip(flip);
+        break;
+    case Gow3::FlipRoute::Unordered:
+        // Never read/reset the accumulator from an unexpected thread.
+        std::printf("GoW3 inputs: unordered accepted flip=%llu; camera interval NOT completed, DLAA=blocked\n",
+                    (unsigned long long)flip.id);
+        if (gow3_trace_enabled) {
+            Gow3::Trace::Write({.kind=Gow3::Trace::Kind::Unordered, .flip=flip});
+            Gow3::Trace::Flush();
+        }
+        break;
+    }
+    return flip;
+}
+
+void Rasterizer::FinishGow3Flip(Gow3::Flip flip) {
+    // Single camera closure site. Runs behind preceding draws, even when the
+    // trace is off, unavailable or full. Missing snapshots/conflicts stay fatal
+    // to this interval; no guest-memory fallback and no presentation callback.
+    const auto frame = gow3_frames.Finish(flip);
+    if (!frame) return;
+    if(gow3_provenance_enabled)
+        gow3_pair->ProvenanceEvents(texture_cache.DrainProvenance(),"before_accepted_flip",flip.id);
+    if (gow3_pair) gow3_pair->Boundary(flip,frame->number,frame->status);
+    if (gow3_trace_enabled) {
+        Gow3::Trace::WriteOrderedInterval(gow3_trace.Finish(flip, {
+            .number=frame->number, .color=flip.address,
+            .width=frame->width, .height=frame->height,
+            .samples=frame->samples, .unsnapshotted=frame->unsnapshotted,
+            .status=u32(frame->status), .snapshot_reasons=frame->snapshot_reasons}));
+    }
+    if (frame->status != frame->prior || frame->number % 120 == 0 || FrameCapture::Active()) {
+        char note[1024];
+        const auto reasons = Gow3::FormatSnapshotCounts(frame->snapshot_reasons);
+        std::snprintf(note, sizeof(note),
+            "GoW3 inputs: frame=%llu flip=%llu buffer=%d eop=%u status=%s samples=%u unsnapshotted=%u size=%ux%u DLAA=blocked snapshot-reasons=%s\n",
+            (unsigned long long)frame->number, (unsigned long long)flip.id, flip.buffer,
+            unsigned(flip.eop), Gow3::Name(frame->status), frame->samples,
+            frame->unsnapshotted, frame->width, frame->height, reasons.data());
+        std::printf("%s", note);
+        if (FrameCapture::Active()) FrameCapture::Note(note);
+    }
+}
+
 const PreparedStage* Rasterizer::FindPreparedStage(const Shader::Info& stage) const {
     // Sharps a draw-preparation worker read from the same flattened user data.
     if (!bind_prepared || SpartanToggle::Disabled(SpartanToggle::PreparedResources)) {
@@ -1617,6 +1880,10 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     set_writes.clear();
     buffer_infos.clear();
     image_infos.clear();
+    if(gow3_provenance_enabled) {
+        const auto* row=pipeline->IsCompute() ? nullptr : gow3_pair->Pending();
+        gow3_image_provenance.Begin(row ? row->serial : 0,row ? row->interval : 0);
+    }
     // spartanport: G-buffer passes sample material textures for a scene rendered below the output
     // size; the temporal upscaler restores the detail of the output's mip level (FSR guide:
     // log2(render / output)). Shadows, post-processing and UI keep the guest's bias.
@@ -1750,6 +2017,24 @@ void Rasterizer::EmitVertexBuffers() {
     auto& v = vertex_binds;
     const bool dynamic_input = instance.IsVertexInputDynamicState();
     const u32 num_buffers = v.num_buffers;
+    if(auto* row=gow3_pair ? gow3_pair->Pending() : nullptr;
+       row && row->grouped_details && row->shader.enabled) {
+        auto& s=row->shader; s.vertex_input_seen=true; s.dynamic_vertex_input=dynamic_input;
+        s.attribute_count=u32(std::min(v.attributes.size(),s.attributes.size()));
+        s.stream_count=u32(std::min(v.bindings.size(),s.streams.size()));
+        s.vertex_dropped=u32(v.attributes.size()-s.attribute_count+v.bindings.size()-s.stream_count);
+        for(u32 i=0;i<s.attribute_count;++i) {
+            const auto& a=v.attributes[i]; s.attributes[i]={a.location,a.binding,u32(a.format),a.offset};
+        }
+        for(u32 i=0;i<s.stream_count;++i) {
+            const auto& b=v.bindings[i]; auto& target=s.streams[i];
+            target={b.binding,b.stride,u32(b.inputRate),b.divisor};
+            if(b.binding<num_buffers) {
+                target.buffer=PairHandleBits(VkBuffer(v.host_buffers[b.binding]));
+                target.offset=v.host_offsets[b.binding]; target.size=v.host_sizes[b.binding];
+            } else ++s.vertex_dropped;
+        }
+    }
     scheduler.ReserveRecordData(
         v.bindings.size() * sizeof(v.bindings[0]) + v.attributes.size() * sizeof(v.attributes[0]) +
         num_buffers * (sizeof(vk::Buffer) + 3 * sizeof(vk::DeviceSize)) + 128);
@@ -2108,6 +2393,25 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     return true;
 }
 
+void Rasterizer::ObserveGow3Inputs(const Shader::Info& stage, u32 slot,
+                                  const void* snapshot, size_t size) {
+    if (!gow3_depth_draw || stage.sw_stage != Shader::SwStage::Vertex ||
+        stage.pgm_hash != Gow3::DepthShader || slot != 1 || size != 144) return;
+    const auto& depth = texture_cache.GetImage(db_desc.first);
+    if (depth.info.pixel_format != vk::Format::eD32SfloatS8Uint) return;
+    if (gow3_trace_enabled) gow3_trace.Snapshot(snapshot != nullptr);
+    const auto reason=Gow3::ResolveSnapshotReason(snapshot!=nullptr,num_ring_stages!=0,
+                                                FindGow3SnapshotReason(stage));
+    if (gow3_pair && gow3_pair->Pending()) {
+        gow3_pair->Snapshot(snapshot,size,reason,PairAttachment(depth));
+    }
+    // A missing snapshot invalidates this frame instead of dereferencing a guest
+    // pointer whose mapping check proves only a range, not readable host memory.
+    gow3_frames.Observe(stage.pgm_hash, slot, snapshot, size, depth.info.guest_address,
+                        depth.info.size.width, depth.info.size.height,
+                        reason);
+}
+
 void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* prepared,
                              Shader::Backend::Bindings& binding,
                              Shader::PushData& push_data, u32& write_index) {
@@ -2126,6 +2430,9 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                                      constant_ring->Data(ring->offset), ring->size);
             }
             if (!desc.IsSpecial()) {
+                if (gow3_inputs_enabled) {
+                    ObserveGow3Inputs(stage, buffer_index, constant_ring->Data(ring->offset), ring->size);
+                }
                 if (ring->size == 864 && gbuffer_draw &&
                     memory->IsValidGpuMapping(ring->address, 0)) {
                     camera_motion->OnConstants(reinterpret_cast<const float*>(ring->address));
@@ -2187,6 +2494,9 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         } else {
             const auto vsharp =
                 prepared ? prepared->buffer_sharps[buffer_index] : desc.GetSharp(stage);
+            if (gow3_inputs_enabled) {
+                ObserveGow3Inputs(stage, buffer_index, nullptr, vsharp.GetSize());
+            }
             if (vsharp.GetSize() == 864 && gbuffer_draw &&
                 memory->IsValidGpuMapping(vsharp.base_address, 0)) {
                 camera_motion->OnConstants(reinterpret_cast<const float*>(vsharp.base_address));
@@ -2243,6 +2553,13 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         set_write.descriptorCount = 1;
         set_write.descriptorType = vk::DescriptorType::eStorageBuffer;
         set_write.pBufferInfo = &buffer_infos.back();
+        if(stage.sw_stage==Shader::SwStage::Vertex && stage.pgm_hash==Gow3::DepthShader) {
+            if(auto* s=gow3_pair ? gow3_pair->Shader() : nullptr) {
+                const auto& b=buffer_infos.back();
+                s->Binding({buffer_index,set_write.dstBinding,binding.buffer,u32(desc.buffer_type),
+                            PairHandleBits(VkBuffer(b.buffer)),b.offset,b.range,ring!=nullptr});
+            }
+        }
         ++binding.buffer;
     }
 }
@@ -2287,6 +2604,17 @@ Rasterizer::ImageDescCacheEntry& Rasterizer::CachedImageDescEntry(const AmdGpu::
         entry.view_memo = {};
     }
     return entry;
+}
+
+void Rasterizer::NoteGow3Binding(VideoCore::ImageId id,Gow3::Provenance::Path path) {
+    // Same sole-writer ownership as image_infos, including the helper's partial
+    // completion. No access to Pair::Capture from the helper thread.
+    if(!gow3_provenance_enabled || !gow3_image_provenance.Enabled()) return;
+    const auto index=u32(image_infos.size()-1);
+    if(index>=Gow3::Provenance::Bindings::Capacity) {
+        gow3_image_provenance.Set(index,{},path); return;
+    }
+    gow3_image_provenance.Set(index,texture_cache.DescribeProvenance(id,image_infos.back().imageView),path);
 }
 
 void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* prepared,
@@ -2457,6 +2785,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         bool is_storage = desc.type == VideoCore::TextureCache::BindingType::Storage;
         if (!image_id) {
             image_infos.emplace_back(VK_NULL_HANDLE, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
+            NoteGow3Binding({},on_helper?Gow3::Provenance::Path::Helper:Gow3::Provenance::Path::Normal);
         } else {
             if (auto& old_image = texture_cache.GetImage(image_id);
                 old_image.binding.needs_rebind) {
@@ -2483,6 +2812,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 if (const auto proxy = scene_targets->SampleProxy(image, desc.view_info)) {
                     image.usage.texture = 1u;
                     image_infos.emplace_back(VK_NULL_HANDLE, proxy->view, proxy->layout);
+                    NoteGow3Binding(image_id,Gow3::Provenance::Path::Normal);
                     if (set_ok && binding_index < resolved.size()) {
                         resolved[binding_index] = {image_id, proxy->view, image.backing,
                                                    desc.view_info.range, true};
@@ -2532,6 +2862,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 upscaler->RedirectSampled(image_id, image_view.info, view, layout);
             }
             image_infos.emplace_back(VK_NULL_HANDLE, view, layout);
+            NoteGow3Binding(image_id,on_helper?Gow3::Provenance::Path::Helper:Gow3::Provenance::Path::Normal);
             if (set_ok && binding_index < resolved.size()) {
                 resolved[binding_index] = {image_id, *image_view.image_view, image.backing,
                                            desc.view_info.range};
@@ -2681,6 +3012,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
         const auto& entry = set.entries[i];
         if (!entry.id) {
             image_infos.emplace_back(VK_NULL_HANDLE, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
+            NoteGow3Binding({},Gow3::Provenance::Path::Memo);
             continue;
         }
         texture_cache.MarkFound(entry.id);
@@ -2691,6 +3023,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
         if (entry.proxy) {
             image_infos.emplace_back(VK_NULL_HANDLE, entry.view,
                                      scene_targets->PrepareSample(image, entry.range.base.level));
+            NoteGow3Binding(entry.id,Gow3::Provenance::Path::Memo);
             ++proxy_samples;
             continue;
         }
@@ -2700,6 +3033,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
         barrier |= runtime.Transit(&image, new_layout, vk::PipelineStageFlagBits2::eAllCommands,
                                    vk::AccessFlagBits2::eShaderRead, entry.range);
         image_infos.emplace_back(VK_NULL_HANDLE, entry.view, image.backing->state.layout);
+        NoteGow3Binding(entry.id,Gow3::Provenance::Path::Memo);
     }
     (void)first_image_idx;
     return true;
@@ -3445,6 +3779,20 @@ void Rasterizer::UpdateViewportScissorState() const {
         scissors.push_back(empty_scissor);
     }
 
+    if (auto* row=gow3_pair ? gow3_pair->Pending() : nullptr) {
+        row->viewport_overflow=viewports.size()>row->viewports.size() || scissors.size()!=viewports.size();
+        row->viewport_count=u32(std::min(viewports.size(),row->viewports.size()));
+        for (u32 i=0;i<row->viewport_count;++i) {
+            const auto& vp=viewports[i];
+            row->viewports[i].bits={std::bit_cast<u32>(vp.x),std::bit_cast<u32>(vp.y),
+                std::bit_cast<u32>(vp.width),std::bit_cast<u32>(vp.height),
+                std::bit_cast<u32>(vp.minDepth),std::bit_cast<u32>(vp.maxDepth)};
+            if (i<scissors.size()) {
+                row->viewports[i].offset={scissors[i].offset.x,scissors[i].offset.y};
+                row->viewports[i].extent={scissors[i].extent.width,scissors[i].extent.height};
+            }
+        }
+    }
     auto& dynamic_state = scheduler.GetDynamicState();
     dynamic_state.SetViewports(viewports);
     dynamic_state.SetScissors(scissors);
@@ -3489,20 +3837,31 @@ void Rasterizer::UpdateDepthStencilState() const {
     }
 
     const bool depth_bounds_test_enabled = depth_stencil.depth_bounds_enable;
+    auto* shader_evidence=gow3_pair ? gow3_pair->Shader() : nullptr;
+    if(shader_evidence) {
+        shader_evidence->dynamic_seen=true;
+        shader_evidence->bounds_enabled=depth_bounds_test_enabled;
+        if(depth_bounds_test_enabled) shader_evidence->bounds_bits={
+            std::bit_cast<u32>(regs.depth_bounds_min),std::bit_cast<u32>(regs.depth_bounds_max)};
+    }
     dynamic_state.SetDepthBoundsTestEnabled(depth_bounds_test_enabled);
     if (depth_bounds_test_enabled) {
         dynamic_state.SetDepthBounds(regs.depth_bounds_min, regs.depth_bounds_max);
     }
 
     const auto depth_bias_enabled = regs.polygon_control.NeedsBias();
+    if(shader_evidence) shader_evidence->bias_enabled=depth_bias_enabled;
     dynamic_state.SetDepthBiasEnabled(depth_bias_enabled);
     if (depth_bias_enabled) {
         const bool front = regs.polygon_control.enable_polygon_offset_front;
         // spartanport: SPARTAN_LIGHTING_TEST=bias passes the slope scale as the guest gives it.
         const float slope = front ? regs.poly_offset.front_scale : regs.poly_offset.back_scale;
-        dynamic_state.SetDepthBias(
-            front ? regs.poly_offset.front_offset : regs.poly_offset.back_offset,
-            regs.poly_offset.depth_bias, LightingTest::Current().bias ? slope : slope / 16.f);
+        const float constant=front ? regs.poly_offset.front_offset : regs.poly_offset.back_offset;
+        const float clamp=regs.poly_offset.depth_bias;
+        const float effective_slope=LightingTest::Current().bias ? slope : slope / 16.f;
+        dynamic_state.SetDepthBias(constant,clamp,effective_slope);
+        if(shader_evidence) shader_evidence->bias_bits={std::bit_cast<u32>(constant),
+            std::bit_cast<u32>(clamp),std::bit_cast<u32>(effective_slope)};
     }
 
     const bool stencil_test_enabled = depth_stencil.stencil_test_enable;
@@ -3607,6 +3966,10 @@ void Rasterizer::UpdateColorBlendingState(const GraphicsPipeline* pipeline) cons
     auto& dynamic_state = scheduler.GetDynamicState();
     dynamic_state.SetBlendConstants(regs.blend_constants);
     dynamic_state.SetColorWriteMasks(pipeline->GetGraphicsKey().write_masks);
+    if(auto* row=gow3_pair ? gow3_pair->Pending() : nullptr; row && row->grouped_details) {
+        for(size_t i=0;i<row->blend_constant_bits.size();++i)
+            row->blend_constant_bits[i]=std::bit_cast<u32>(regs.blend_constants[i]);
+    }
     dynamic_state.SetAttachmentFeedbackLoopEnabled(attachment_feedback_loop);
 }
 

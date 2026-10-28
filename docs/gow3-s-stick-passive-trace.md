@@ -1,0 +1,15 @@
+# Trace passive de S et du stick gauche
+
+Variante locale de la trace clavier, schema `keyboard-s-left-y-v1`. Le probe K et ses journaux restent dans `out/dlaa-keyboard-trace`; les sources anterieures modifiees pour cette variante sont conservees dans `out/dlaa-s-stick-trace/before`. Aucun changement de commande, aucune extension de la duree d'un appui.
+
+Activation identique : `SPARTAN_KEY_TRACE=1`, chemins absolus propres a la session dans `SPARTAN_KEY_TRACE_FILE` et `SPARTAN_KEY_TRACE_TRIGGER`. Desactive par defaut. Un seul declenchement, dix secondes QPC, 65 536 octets footer compris, file fixe de 128 records, creation exclusive sans ecrasement. Les pertes et les limites du footer precedent restent applicables. Aucun autre identifiant de touche, texte, bouton, axe horizontal ou stick droit n'est journalise.
+
+Le thread SDL observe seulement les evenements S dans la fenetre cible. Les temps sont ceux du traitement des evenements, pas ceux des transitions physiques Windows. Chaque lecture transporte son propre identifiant, ses bornes temporelles et le contexte atomique avec generation.
+
+Le sampler lit S avant/apres son traitement clavier existant. Trois valeurs de l'axe vertical gauche (0..255) sont copiees depuis les donnees natives deja produites : `pad_y` avant le clavier lorsque la manette est presente, `host_y` apres le sampler hote, `final_y` apres les filtres existants avant retour au jeu. Ce ne sont pas des lectures de memoire invitee. 128 est le centre nominal; 255 est le bas. Une valeur ne prouve pas quelle source l'a causee. Les transformations et autres touches peuvent influencer cet axe sans que leur identite soit enregistree.
+
+Bits `flags` d'un `read_range` : 1 S disponible, 2/4 S avant/apres, 8 host_y valide, 16 final_y valide, 32/64 blocage hote/porte, 128/256 attente de relachement avant/apres, 512 manette presente, 1024 pad_y valide. Un axe sans bit de validite est inconnu et encode 0; cela ne signifie pas un stick vers le haut. En cas de changement de contexte, perte de focus ou capture/texte/blocage, les valeurs S/axes sont masquees et seuls les bits de blocage sont conserves. La fusion de lectures exige egalite des flags, contextes et trois axes; elle conserve premier/dernier ID, nombre et ecart maximal.
+
+Tests hors jeu : maintien/relachement S synthetique, impulsion entre lectures, axe manette et priorite clavier, K/Espace sans S, changement d'axe empechant une fusion, invalidite/masquage, contexte/focus, saturation, concurrence, expiration, desactivation et non-ecrasement. Le sampler reel est compare dans trois modes : stubs, bridge desactive et bridge active. Aucun test synthetique n'injecte d'entree Windows.
+
+Essai reel borne : sauvegarde isolee copiee/verifiee, son coupe, Skip Intro et DLAA desactive. Verifier le menu principal et le focus; declencher puis envoyer une seule touche S ponctuelle avec l'outil autorise. N'envoyer Espace que si Load est clairement selectionne; verifier l'ecran suivant avant toute autre validation. Si la selection reste inchangee ou ambigue, arreter les entrees. Aucune touche maintenue ni voie alternative d'injection.

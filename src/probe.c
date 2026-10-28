@@ -13,6 +13,7 @@
 #include "cheat_hook.h"
 #include "qte_hook.h"
 #include "actor_hook.h"
+#include "health_passive_bridge.h"
 #include "damage_hook.h"
 #include "menu_hook.h"
 #include "gpu/spartanportgpu.h"
@@ -501,15 +502,22 @@ static void install_actor_watch(Segment *segments, uint64_t count, uint64_t size
     if (at == UINT64_MAX || !mapped(segments, count, at, SPARTAN_ACTOR_HOOK_LENGTH) ||
         !spartanport_actor_signature_match(image + at, size - at)) {
         printf("Health display: unavailable (code not found in this eboot.bin)\n");
+        spartanport_health_passive_unavailable(1);
         return;
     }
     unsigned char *stub = allocate(page_size);
     const int64_t delta = (int64_t)(uintptr_t)stub - (int64_t)(uintptr_t)(image + at + 5);
     if (delta < INT32_MIN || delta > INT32_MAX) {
         printf("Health display: unavailable (hook outside relative-jump range)\n");
+        spartanport_health_passive_unavailable(2);
         return;
     }
-    spartanport_actor_build_stub(stub, spartanport_actor_slots_address(), (uintptr_t)(image + at + SPARTAN_ACTOR_HOOK_LENGTH));
+    if (!spartanport_health_passive_build(stub, page_size, spartanport_actor_slots_address(),
+                                        (uintptr_t)(image + at + SPARTAN_ACTOR_HOOK_LENGTH))) {
+        printf("Health display: unavailable (stub capacity)\n");
+        spartanport_health_passive_unavailable(2);
+        return;
+    }
     protect(stub, page_size, 5);
     const int32_t relative = (int32_t)delta;
     image[at] = 0xe9;

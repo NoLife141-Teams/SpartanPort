@@ -544,6 +544,8 @@ void TextureCache::CopyAlias(ImageId src_id, ImageId dst_id, const Extent3D& ext
 void TextureCache::PublishAliasWrite(ImageId image_id) {
     Image& image = slot_images[image_id];
     image.alias_generation = ++alias_generation;
+    NoteProvenance(image_id, image, Vulkan::Gow3::Provenance::Reason::AliasAuthorityPublished,
+                   image.info.guest_address, image.info.guest_size);
     if (False(image.flags & ImageFlagBits::Aliased)) {
         return;
     }
@@ -597,24 +599,28 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
         const auto image_begin = image.info.guest_address;
         const auto image_end = image.info.guest_address + image.info.guest_size;
         if (image.Overlaps(addr, size)) {
+            NoteProvenance(image_id, image, Vulkan::Gow3::Provenance::Reason::CpuOverlap, addr, size);
             // Modified region overlaps image, so the image was definitely accessed by this fault.
             // Untrack the image, so that the range is unprotected and the guest can write freely.
             InvalidateAlias(image);
             image.flags |= ImageFlagBits::CpuDirty;
             UntrackImage(image_id);
         } else if (pages_end < image_end) {
+            NoteProvenance(image_id, image, Vulkan::Gow3::Provenance::Reason::CpuPageUntrackHead, addr, size);
             // This page access may or may not modify the image.
             // We should not mark it as dirty now. If it really was modified
             // it will receive more invalidations on its other pages.
             // Remove tracking from this page only.
             UntrackImageHead(image_id);
         } else if (image_begin < pages_start) {
+            NoteProvenance(image_id, image, Vulkan::Gow3::Provenance::Reason::CpuPageUntrackTail, addr, size);
             // This page access does not modify the image but the page should be untracked.
             // We should not mark this image as dirty now. If it really was modified
             // it will receive more invalidations on its other pages.
             UntrackImageTail(image_id);
         } else {
             // Image begins and ends on this page so it can not receive any more invalidations.
+            NoteProvenance(image_id, image, Vulkan::Gow3::Provenance::Reason::MaybeCpuDirty, addr, size);
             // We will check it's hash later to see if it really was modified.
             MarkAsMaybeDirty(image_id, image);
         }
@@ -622,6 +628,9 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
 }
 
 void TextureCache::NoteBackingWrite(VAddr address, u64 size) {
+    // Range-only event: no image lookup or invented UID on this foreign thread.
+    if (provenance) provenance->Push({.address=address, .size=size,
+        .reason=Vulkan::Gow3::Provenance::Reason::BackingWriteNoted});
     std::scoped_lock lock{backing_writes_mutex};
     backing_writes.emplace_back(address, size);
     has_backing_writes.store(true, std::memory_order_release);
@@ -646,6 +655,7 @@ void TextureCache::ApplyBackingWrites() {
             if (True(image.flags & (ImageFlagBits::GpuModified | ImageFlagBits::Aliased))) {
                 return;
             }
+            NoteProvenance(image_id, image, Vulkan::Gow3::Provenance::Reason::BackingWriteApplied, address, size);
             image.flags |= ImageFlagBits::CpuDirty;
             UntrackImage(image_id);
         });
@@ -663,6 +673,7 @@ void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
             return;
         }
         // Ensure image is reuploaded when accessed again.
+        NoteProvenance(image_id, image, Vulkan::Gow3::Provenance::Reason::GpuBaseInvalidation, address, max_size);
         InvalidateAlias(image);
         image.flags |= ImageFlagBits::GpuDirty;
     });
@@ -675,6 +686,7 @@ void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
     ImageIds deleted_images;
     ForEachImageInRegion(cpu_addr, size, [&](ImageId id, Image&) { deleted_images.push_back(id); });
     for (const ImageId id : deleted_images) {
+        NoteProvenance(id, slot_images[id], Vulkan::Gow3::Provenance::Reason::Unmap, cpu_addr, size);
         // TODO: Download image data back to host.
         FreeImage(id);
     }
@@ -1462,6 +1474,8 @@ void TextureCache::RegisterImage(ImageId image_id) {
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;
     ++registry_generation;
+    NoteProvenance(image_id, image, Vulkan::Gow3::Provenance::Reason::Registered,
+                   image.info.guest_address, image.info.guest_size);
     total_used_memory += Common::AlignUp(image.info.guest_size, 1024);
     image.lru_id = lru_cache.Insert(image_id, gc_tick);
     image.lru_touched_tick = gc_tick;
@@ -1470,6 +1484,8 @@ void TextureCache::RegisterImage(ImageId image_id) {
     u32 aliases{};
     bool inserted{};
     ForEachAlias(image, [&](ImageId candidate_id, Image& candidate) {
+        NoteProvenance(candidate_id, candidate, Vulkan::Gow3::Provenance::Reason::AliasMember,
+                       candidate.info.guest_address, candidate.info.guest_size, image.image_uid);
         if (!state) {
             auto result = alias_states.try_emplace(image.info.guest_address);
             state = std::addressof(result.first.value());
@@ -1497,6 +1513,8 @@ void TextureCache::UnregisterImage(ImageId image_id) {
                "Trying to unregister an already unregistered image");
     image.flags &= ~ImageFlagBits::Registered;
     ++registry_generation;
+    NoteProvenance(image_id, image, Vulkan::Gow3::Provenance::Reason::Unregistered,
+                   image.info.guest_address, image.info.guest_size);
     lru_cache.Free(image.lru_id);
     total_used_memory -= Common::AlignUp(image.info.guest_size, 1024);
     ForEachPage(image.info.guest_address, image.info.guest_size, [this, image_id](u64 page) {
@@ -1846,6 +1864,52 @@ void TextureCache::DeleteImage(ImageId image_id) {
         }
         slot_images.erase(image_id);
     });
+}
+
+Vulkan::Gow3::Provenance::Identity TextureCache::DescribeProvenance(ImageId id, vk::ImageView actual_view) {
+    using namespace Vulkan::Gow3::Provenance;
+    Identity result;
+    if (!provenance) return result;
+    const auto bits=[](auto handle) { u64 value{}; static_assert(sizeof(handle)<=sizeof(value));
+        std::memcpy(&value,&handle,sizeof(handle)); return value; };
+    result.view=bits(VkImageView(actual_view));
+    if (!actual_view) { result.resolution=Resolution::NullView; return result; }
+    if (!id) return result; // redirected/proxy views remain explicitly unresolved
+    // The guest may invalidate flags/alias authority concurrently. Never wait
+    // for its cache lock, especially on the helper that the owner can Join.
+    // No Vulkan, callbacks, pending-operation locks or allocation under this guard.
+    std::unique_lock guard{mutex,std::try_to_lock};
+    if (!guard.owns_lock()) { result.resolution=Resolution::CacheBusy; return result; }
+    const auto& image=slot_images[id]; // existing owner/helper lifetime; no LRU touch
+    result.slot=id.index; result.uid=image.image_uid;
+    result.registry_generation=RegistryGeneration();
+    result.alias_authority_generation=image.alias_generation;
+    result.address=image.info.guest_address;
+    if (!result.uid || False(image.flags & ImageFlagBits::Registered)) {
+        result.resolution=Resolution::Unregistered; return result;
+    }
+    u32 examined=0, backing_index=0;
+    for (const auto& backing : image.backing_images) {
+        if (++backing_index>16) { result.resolution=Resolution::ScanLimit; return result; }
+        for (u32 i=0;i<backing.image_view_ids.size();++i) {
+            if (++examined>256) { result.resolution=Resolution::ScanLimit; return result; }
+            const auto view_id=backing.image_view_ids[i];
+            // These IDs belong to this live backing, never to a saved diagnostic.
+            const auto& view=slot_image_views[view_id];
+            if (*view.image_view!=actual_view) continue;
+            const auto& ci=backing.image.image_ci;
+            result.backing_ordinal=backing_index; result.view_ordinal=i+1;
+            result.view_slot=view_id.index; result.image=bits(VkImage(backing.image.image));
+            result.format=u32(ci.format); result.samples=u32(ci.samples);
+            result.view_format=u32(view.created_format); result.aspect=u32(view.created_aspects);
+            result.mip=view.info.range.base.level; result.levels=view.info.range.extent.levels;
+            result.layer=view.info.range.base.layer; result.layers=view.info.range.extent.layers;
+            result.current_backing=&backing==image.backing;
+            result.resolution=Resolution::NativeView;
+            return result;
+        }
+    }
+    return result;
 }
 
 } // namespace VideoCore

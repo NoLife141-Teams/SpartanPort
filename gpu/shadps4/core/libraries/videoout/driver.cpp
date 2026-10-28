@@ -301,10 +301,14 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 }
 
 void VideoOutDriver::Flip(const Request& req) {
+    if (req.trace.id) {
+        Vulkan::Gow3::Trace::Write({.kind=Vulkan::Gow3::Trace::Kind::Dequeued, .flip=req.trace});
+        Vulkan::Gow3::Trace::Flush();
+    }
     // Update HDR status before presenting, then present the frame (spartanport: on the swap thread).
-    RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr] {
+    RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr, trace = req.trace] {
         presenter->SetHDR(hdr);
-        presenter->Present(frame);
+        presenter->Present(frame, false, true, trace);
     });
     Vulkan::FrameCapture::OnFlip(req.index >= 0 ? req.port->buffer_slots[req.index].address_left
                                                 : 0);
@@ -593,9 +597,10 @@ void VideoOutDriver::DrawBlankFrame() {
 
 void VideoOutDriver::DrawLastFrame() {
     RunPresenter([this] {
-        const auto frame = presenter->PrepareLastFrame();
+        Vulkan::Gow3::Trace::Flip trace;
+        const auto frame = presenter->PrepareLastFrame(&trace);
         if (frame != nullptr) {
-            presenter->Present(frame, true);
+            presenter->Present(frame, true, true, trace);
         }
     }, true);
 }
@@ -604,7 +609,7 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
                                 bool is_eop /*= false*/) {
     {
         std::unique_lock lock{port->port_mutex};
-        if (index != -1 && port->flip_status.flip_pending_num > 16) {
+        if (!Vulkan::Gow3::CanAcceptFlip(index, port->flip_status.flip_pending_num)) {
             LOG_ERROR(Lib_VideoOut, "Flip queue is full");
             return false;
         }
@@ -627,6 +632,10 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
 }
 
 void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_arg, bool is_eop) {
+    // SubmitFlip rejects a full queue before reaching this function. Exactly
+    // one ordered camera marker per accepted request; redraws never enter here.
+    const auto trace = presenter->GetRasterizer().AcceptGow3Flip(
+        index >= 0 ? port->buffer_slots[index].address_left : 0, index, is_eop);
     Vulkan::Frame* frame;
     if (index == -1) {
         frame = presenter->PrepareBlankFrame(false);
@@ -639,12 +648,14 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
 
     {
         std::scoped_lock lock{mutex};
+        if (trace.id) Vulkan::Gow3::Trace::Write({.kind=Vulkan::Gow3::Trace::Kind::Queued, .flip=trace});
         requests.push({
             .frame = frame,
             .port = port,
             .flip_arg = flip_arg,
             .index = index,
             .eop = is_eop,
+            .trace = trace,
         });
     }
     request_cv.notify_one();

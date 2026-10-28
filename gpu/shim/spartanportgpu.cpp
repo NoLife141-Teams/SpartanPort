@@ -1,4 +1,6 @@
 #include "spartanport_write_log.h"
+#include "../../src/health_passive_bridge.h"
+#include "../../src/keyboard_trace_bridge.h"
 // spartanport: glue between the C loader and the vendored shadPS4 video core.
 #include "spartanport_overlay.h"
 #include "spartanport_png.h"
@@ -236,6 +238,10 @@ extern "C" int spartanportgpu_init(const SpartanGpuConfig* config) {
     g_window_thread = std::thread([title, width, height] {
         Common::SetCurrentThreadName("spartanport:window");
         auto* window = new Frontend::WindowSDL(width, height, title.c_str());
+        // Ready is signalled only after passive initialization; the loader waits
+        // before installing hooks or entering any guest module initializer.
+        const bool health_passive = spartanport_health_passive_start() != 0;
+        const bool key_trace = spartanport_key_trace_start() != 0;
         {
             std::scoped_lock lock{g_window_mutex};
             g_window = window;
@@ -243,8 +249,11 @@ extern "C" int spartanportgpu_init(const SpartanGpuConfig* config) {
         }
         g_window_cv.notify_all();
         while (window->PollEvents()) {
+            if (health_passive) spartanport_health_passive_tick();
             SDL_Delay(2);
         }
+        if (key_trace) spartanport_key_trace_stop();
+        if (health_passive) spartanport_health_passive_stop();
         LOG_INFO(Frontend, "Window closed by user");
         runtime_report();
         std::fflush(stdout);

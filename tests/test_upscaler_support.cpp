@@ -7,9 +7,18 @@
 #include <unistd.h>
 #include "spartanport_settings.h"
 
+#ifdef _WIN32
+static int setenv(const char* name, const char* value, int overwrite) {
+    return !overwrite && std::getenv(name) ? 0 : _putenv_s(name, value);
+}
+static int unsetenv(const char* name) {
+    return _putenv_s(name, "");
+}
+#endif
+
 int main() {
     using namespace SpartanSettings;
-    char path[] = "/tmp/spartanport-upscaler-test-XXXXXX";
+    char path[] = "spartanport-upscaler-test-XXXXXX";
     const int fd = mkstemp(path);
     assert(fd >= 0);
     close(fd);

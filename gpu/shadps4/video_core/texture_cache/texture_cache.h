@@ -8,6 +8,7 @@
 #include <atomic>
 #include "video_core/texture_cache/readback_queue.h"
 #include "video_core/texture_cache/readback_sources.h"
+#include "video_core/renderer_vulkan/gow3_resource_provenance.h"
 #include <chrono>
 #include "spartanport_toggles.h"
 #include <optional>
@@ -238,6 +239,14 @@ public:
         auto& image = slot_images[id];
         return !uid || image.image_uid == uid ? &image : nullptr;
     }
+    // Configure once, before BindRasterizer publishes this cache to workers.
+    void EnableProvenance() { provenance = std::make_unique<Vulkan::Gow3::Provenance::Inbox>(); }
+    Vulkan::Gow3::Provenance::Batch DrainProvenance() {
+        return provenance ? provenance->Drain() : Vulkan::Gow3::Provenance::Batch{};
+    }
+    // Only already-resolved live IDs on the binding owner/helper; never IDs
+    // read from a log. Does not TouchImage, create views or retain resources.
+    Vulkan::Gow3::Provenance::Identity DescribeProvenance(ImageId id, vk::ImageView actual_view);
     /// spartanport diagnostics: writes level 0 of a color image to SPARTAN_DIAG_DIR as raw pixels
     /// (<seq>_<tag>_<address>_<w>x<h>_p<pitch>_b<bytes per pixel>_f<vk format>.raw). Waits for
     /// the GPU.
@@ -436,6 +445,13 @@ private:
 
 private:
     const Vulkan::Instance& instance;
+    std::unique_ptr<Vulkan::Gow3::Provenance::Inbox> provenance;
+    void NoteProvenance(ImageId id, const Image& image, Vulkan::Gow3::Provenance::Reason reason,
+                        u64 address, u64 size, u64 related_uid=0) {
+        if (provenance) provenance->Push({.uid=image.image_uid, .related_uid=related_uid,
+            .registry_generation=RegistryGeneration(), .address=address, .size=size,
+            .slot=id.index, .reason=reason});
+    }
     Vulkan::Scheduler& scheduler;
     Vulkan::Runtime& runtime;
     AmdGpu::Liverpool* liverpool;

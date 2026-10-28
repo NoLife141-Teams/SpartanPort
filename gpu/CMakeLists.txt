@@ -191,6 +191,25 @@ endif()
 # linked here, where CMake knows its dependencies (build.sh builds them with ninja).
 if (WIN32)
     enable_language(RC)
+    # Experimental passive health diagnostics: CPU-only fixtures, no GPU/game startup.
+    add_executable(health-passive-bridge-test EXCLUDE_FROM_ALL
+        ../tests/test_health_passive_bridge.cpp shim/spartanport_health_passive.cpp)
+    add_executable(health-inline-test EXCLUDE_FROM_ALL ../experiments/gow3_automation/test_health_inline_trial.cpp)
+    add_executable(health-lifecycle-test EXCLUDE_FROM_ALL ../experiments/gow3_automation/test_health_lifecycle.cpp)
+    add_executable(health-collection-test EXCLUDE_FROM_ALL ../experiments/gow3_automation/test_health_collection.cpp)
+    add_executable(keyboard-trace-test EXCLUDE_FROM_ALL ../tests/test_keyboard_trace.cpp)
+    add_executable(keyboard-trace-bridge-test EXCLUDE_FROM_ALL
+        ../tests/test_keyboard_trace_bridge.cpp shim/spartanport_keyboard_trace.cpp)
+    foreach(test keyboard-trace-test keyboard-trace-bridge-test)
+        target_compile_options(${test} PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+        target_compile_definitions(${test} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+        target_link_libraries(${test} PRIVATE bcrypt -pthread)
+    endforeach()
+    foreach(test health-passive-bridge-test health-inline-test health-lifecycle-test health-collection-test)
+        target_compile_options(${test} PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+        target_compile_definitions(${test} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+        target_link_libraries(${test} PRIVATE bcrypt -pthread)
+    endforeach()
     file(GLOB SPARTAN_RUNTIME CONFIGURE_DEPENDS ../src/runtime*.c)
     file(GLOB SPARTAN_ATRAC9 CONFIGURE_DEPENDS ../third_party/LibAtrac9/C/src/*.c)
     add_library(atrac9 STATIC ${SPARTAN_ATRAC9})
@@ -201,6 +220,7 @@ if (WIN32)
         ../packaging/windows/spartanport-probe.rc)
     set_target_properties(spartanport-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
     target_compile_options(spartanport-probe PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
+    target_compile_definitions(spartanport-probe PRIVATE SPARTAN_KEY_TRACE_RUNTIME)
     target_include_directories(spartanport-probe PRIVATE .. ../src)
     target_link_libraries(spartanport-probe PRIVATE spartanportgpu atrac9 onecore bcrypt ws2_32 -pthread)
     # The PS4 range (64 GiB - 1 TiB) must stay free: no high-entropy ASLR for heaps and stacks.
@@ -292,6 +312,136 @@ if (WIN32)
 endif()
 set_source_files_properties(../tests/test_pipeline_binary_cache.cpp PROPERTIES
     COMPILE_OPTIONS "-fvisibility=hidden;-fvisibility-inlines-hidden")
+add_executable(gow3-camera-inputs-test EXCLUDE_FROM_ALL ../tests/test_gow3_camera_inputs.cpp)
+target_compile_options(gow3-camera-inputs-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-camera-inputs-test PRIVATE ..)
+
+add_executable(gow3-pair-capture-test EXCLUDE_FROM_ALL ../tests/test_gow3_pair_capture.cpp
+               shadps4/video_core/renderer_vulkan/gow3_pair_capture.cpp)
+target_compile_options(gow3-pair-capture-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-pair-capture-test PRIVATE ..)
+
+add_executable(gow3-group-capture-test EXCLUDE_FROM_ALL ../tests/test_gow3_group_capture.cpp
+               shadps4/video_core/renderer_vulkan/gow3_pair_capture.cpp)
+target_compile_options(gow3-group-capture-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-group-capture-test PRIVATE ..)
+
+add_executable(gow3-capture-bytes-test EXCLUDE_FROM_ALL ../tests/test_gow3_capture_bytes.cpp
+               shadps4/video_core/renderer_vulkan/gow3_pair_capture.cpp)
+target_compile_options(gow3-capture-bytes-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-capture-bytes-test PRIVATE ..)
+
+# Read-only ABI description for the bounded offline metadata inspector. No runtime link.
+add_executable(gow3-shader-layout EXCLUDE_FROM_ALL tools/gow3_shader_layout.cpp)
+target_compile_options(gow3-shader-layout PRIVATE -Wall -Wextra -Werror
+    -Wno-error=unused-variable -Wno-error=unused-parameter -Wno-error=reorder-ctor)
+target_include_directories(gow3-shader-layout PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(gow3-shader-layout PRIVATE Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum)
+
+add_executable(gow3-reprojection-contract-test EXCLUDE_FROM_ALL ../tests/test_gow3_reprojection_contract.cpp)
+target_compile_options(gow3-reprojection-contract-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-reprojection-contract-test PRIVATE ..)
+
+add_executable(gow3-depth-samples-test EXCLUDE_FROM_ALL ../tests/test_gow3_depth_samples.cpp)
+target_compile_options(gow3-depth-samples-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-depth-samples-test PRIVATE ..)
+
+add_executable(gow3-clip-pipeline-test EXCLUDE_FROM_ALL ../tests/test_gow3_clip_pipeline.cpp)
+target_compile_options(gow3-clip-pipeline-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-clip-pipeline-test PRIVATE ..)
+
+add_executable(gow3-vertex-contract-test EXCLUDE_FROM_ALL ../tests/test_gow3_vertex_contract.cpp)
+target_compile_options(gow3-vertex-contract-test PRIVATE -UNDEBUG -Wall -Wextra -Werror -ffp-contract=off)
+target_include_directories(gow3-vertex-contract-test PRIVATE ..)
+
+# Standalone synthetic Vulkan fixture: does not link the game/probe runtime.
+set(GOW3_FIXTURE_SHADERS ${CMAKE_CURRENT_BINARY_DIR}/gow3-fixture-shaders)
+add_custom_command(OUTPUT ${GOW3_FIXTURE_SHADERS}/fixture.vert.spv
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${GOW3_FIXTURE_SHADERS}
+    COMMAND ${GLSLANG_COMPILER} --target-env vulkan1.1 -V
+            ${CMAKE_CURRENT_SOURCE_DIR}/../tests/shaders/gow3_depth_fixture.vert
+            -o ${GOW3_FIXTURE_SHADERS}/fixture.vert.spv
+    DEPENDS ../tests/shaders/gow3_depth_fixture.vert VERBATIM)
+set(GOW3_FIXTURE_OUTPUTS ${GOW3_FIXTURE_SHADERS}/fixture.vert.spv)
+foreach(COUNT 1 2)
+    foreach(STAGE frag comp)
+        set(OUTPUT ${GOW3_FIXTURE_SHADERS}/fixture${COUNT}.${STAGE}.spv)
+        add_custom_command(OUTPUT ${OUTPUT}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${GOW3_FIXTURE_SHADERS}
+            COMMAND ${GLSLANG_COMPILER} --target-env vulkan1.1 -V -DSAMPLES=${COUNT}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/shaders/gow3_depth_fixture.${STAGE}
+                    -o ${OUTPUT}
+            DEPENDS ../tests/shaders/gow3_depth_fixture.${STAGE} VERBATIM)
+        list(APPEND GOW3_FIXTURE_OUTPUTS ${OUTPUT})
+    endforeach()
+endforeach()
+add_executable(gow3-vulkan-depth-test EXCLUDE_FROM_ALL ../tests/test_gow3_vulkan_depth.cpp
+               ${GOW3_FIXTURE_OUTPUTS})
+target_compile_options(gow3-vulkan-depth-test PRIVATE -UNDEBUG -Wall -Wextra -Werror
+                       -Wno-missing-field-initializers)
+target_include_directories(gow3-vulkan-depth-test PRIVATE ..)
+target_link_libraries(gow3-vulkan-depth-test PRIVATE Vulkan::Vulkan)
+
+# Independent offscreen copy/lifetime fixture; no game runtime dependency.
+set(GOW3_READBACK_SHADERS ${CMAKE_CURRENT_BINARY_DIR}/gow3-readback-shaders)
+set(GOW3_READBACK_OUTPUTS)
+foreach(STAGE vert frag comp)
+    set(OUTPUT ${GOW3_READBACK_SHADERS}/fixture.${STAGE}.spv)
+    add_custom_command(OUTPUT ${OUTPUT}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${GOW3_READBACK_SHADERS}
+        COMMAND ${GLSLANG_COMPILER} --target-env vulkan1.2 -V
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tests/shaders/gow3_readback_fixture.${STAGE}
+                -o ${OUTPUT}
+        DEPENDS ../tests/shaders/gow3_readback_fixture.${STAGE} VERBATIM)
+    list(APPEND GOW3_READBACK_OUTPUTS ${OUTPUT})
+endforeach()
+add_executable(gow3-vulkan-readback-test EXCLUDE_FROM_ALL ../tests/test_gow3_vulkan_readback.cpp
+               ${GOW3_READBACK_OUTPUTS})
+target_compile_options(gow3-vulkan-readback-test PRIVATE -UNDEBUG -Wall -Wextra -Werror
+                       -Wno-missing-field-initializers)
+target_link_libraries(gow3-vulkan-readback-test PRIVATE Vulkan::Vulkan)
+
+add_executable(gow3-readback-primitives-test EXCLUDE_FROM_ALL ../tests/test_gow3_readback_primitives.cpp)
+add_executable(gow3-resource-provenance-test EXCLUDE_FROM_ALL ../tests/test_gow3_resource_provenance.cpp
+    shadps4/video_core/renderer_vulkan/gow3_pair_capture.cpp)
+target_compile_options(gow3-resource-provenance-test PRIVATE -UNDEBUG -Wall -Wextra -Werror
+    -Wno-error=unused-variable -Wno-error=unused-parameter -Wno-error=reorder-ctor)
+target_include_directories(gow3-resource-provenance-test PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(gow3-resource-provenance-test PRIVATE Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum)
+add_executable(gow3-provenance-budget-test EXCLUDE_FROM_ALL ../tests/test_gow3_provenance_budget.cpp
+    shadps4/video_core/renderer_vulkan/gow3_pair_capture.cpp)
+target_compile_options(gow3-provenance-budget-test PRIVATE -UNDEBUG -Wall -Wextra)
+target_include_directories(gow3-provenance-budget-test PRIVATE shadps4)
+target_link_libraries(gow3-provenance-budget-test PRIVATE Boost::headers)
+target_compile_options(gow3-readback-primitives-test PRIVATE -UNDEBUG -Wall -Wextra -Werror
+                       -Wno-error=unused-variable -Wno-error=unused-parameter -Wno-error=reorder-ctor)
+target_include_directories(gow3-readback-primitives-test PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(gow3-readback-primitives-test PRIVATE Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum)
+
+add_executable(constant-ring-stamps-test EXCLUDE_FROM_ALL ../tests/test_constant_ring_stamps.cpp)
+target_compile_options(constant-ring-stamps-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(constant-ring-stamps-test PRIVATE ..)
+
+add_executable(gow3-frame-trace-test EXCLUDE_FROM_ALL ../tests/test_gow3_frame_trace.cpp
+    shadps4/video_core/renderer_vulkan/gow3_frame_trace.cpp)
+target_compile_options(gow3-frame-trace-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-frame-trace-test PRIVATE ..)
+
+add_executable(gow3-camera-frames-test EXCLUDE_FROM_ALL ../tests/test_gow3_camera_frames.cpp
+    shadps4/video_core/renderer_vulkan/gow3_frame_trace.cpp)
+target_compile_options(gow3-camera-frames-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-camera-frames-test PRIVATE ..)
+
+add_executable(gow3-snapshot-reasons-test EXCLUDE_FROM_ALL ../tests/test_gow3_snapshot_reasons.cpp
+    shadps4/video_core/renderer_vulkan/gow3_frame_trace.cpp)
+target_compile_options(gow3-snapshot-reasons-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-snapshot-reasons-test PRIVATE ..)
+
+add_executable(gow3-trace-trigger-test EXCLUDE_FROM_ALL ../tests/test_gow3_trace_trigger.cpp
+    shadps4/video_core/renderer_vulkan/gow3_frame_trace.cpp)
+target_compile_options(gow3-trace-trigger-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-trace-trigger-test PRIVATE ..)
+
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)
@@ -450,3 +600,20 @@ add_executable(swapchain-focus-test EXCLUDE_FROM_ALL ../tests/test_swapchain_foc
 target_include_directories(swapchain-focus-test PRIVATE shim shadps4)
 target_link_libraries(swapchain-focus-test PRIVATE PkgConfig::SDL3 Vulkan::Vulkan fmt::fmt)
 target_compile_options(swapchain-focus-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Build the experimental validation fixtures without running the probe or game.
+# tools/validate_gow3_diagnostics.py runs them in separate synthetic directories.
+add_custom_target(gow3-diagnostics-tests DEPENDS
+    gow3-camera-inputs-test gow3-pair-capture-test gow3-group-capture-test
+    gow3-capture-bytes-test gow3-shader-layout gow3-reprojection-contract-test
+    gow3-depth-samples-test gow3-clip-pipeline-test gow3-vertex-contract-test
+    gow3-vulkan-depth-test gow3-vulkan-readback-test gow3-readback-primitives-test
+    gow3-resource-provenance-test gow3-provenance-budget-test constant-ring-stamps-test
+    gow3-frame-trace-test gow3-camera-frames-test gow3-snapshot-reasons-test
+    gow3-trace-trigger-test motion-history-test ui-composition-test
+    upscaler-support-test actor-hook-test)
+if (WIN32)
+    add_dependencies(gow3-diagnostics-tests
+        health-passive-bridge-test health-inline-test health-lifecycle-test
+        health-collection-test keyboard-trace-test keyboard-trace-bridge-test)
+endif()

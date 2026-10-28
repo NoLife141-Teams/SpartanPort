@@ -21,6 +21,10 @@
 #include <math.h>
 #include <SDL3/SDL.h>
 #include <sys/stat.h>
+#ifndef SPARTAN_KEY_TRACE_RUNTIME
+#define SPARTAN_KEY_TRACE_DISABLED_STUBS
+#endif
+#include "keyboard_trace_bridge.h"
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
 #define ERR_INVALID_HANDLE ((int32_t)0x80920003)
@@ -495,7 +499,7 @@ static void sample_keyboard(PadData *d, const bool *keys, SDL_MouseButtonFlags m
     key_axis(&d->right_y,pressed & LOOK_UP,pressed & LOOK_DOWN);
 }
 
-static void sample_host(PadData *d) {
+static void sample_host(PadData *d, SpartanKeyTraceRead *trace) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
     d->orientation[3]=1.0f;
@@ -503,7 +507,10 @@ static void sample_host(PadData *d) {
     d->timestamp=now_us();
     SDL_Gamepad *g=current_gamepad();
     watch_wheel();
-    if (spartanportgpu_overlay_captures_input()) { drop_wheel(); return; } /* settings menu open: neutral input */
+    if (spartanportgpu_overlay_captures_input()) {
+        if (trace) trace->flags|=KT_HOST_BLOCK;
+        drop_wheel(); return;
+    } /* settings menu open: neutral input */
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
     load_button_maps();
     if (g) {
@@ -531,10 +538,15 @@ static void sample_host(PadData *d) {
     }
     /* The keyboard works with or without a gamepad: its buttons add to the pad's, and a stick
      * follows the keys only while one of them is held. */
+    if (trace) {
+        if (g) { trace->flags|=KT_PAD_PRESENT|KT_PAD_Y_VALID; trace->pad_y=d->left_y; }
+    }
     if (!k) return;
     const SDL_MouseButtonFlags mouse=SDL_GetMouseState(NULL,NULL);
     const bool wheel[2]={wheel_held(0,d->timestamp),wheel_held(1,d->timestamp)};
+    if (trace) trace->flags|=KT_S_VALID | (k[SDL_SCANCODE_S] ? KT_S_BEFORE : 0);
     sample_keyboard(d,k,mouse,wheel);
+    if (trace && k[SDL_SCANCODE_S]) trace->flags|=KT_S_AFTER;
 }
 
 /* SPARTAN_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
@@ -808,8 +820,15 @@ static void engine_fps_combo(PadData *d) {
  * name) stay hidden until released: the game would take them as a new press. */
 static int hold_after_capture;
 static void sample(PadData *d) {
-    sample_host(d);
-    if (spartanportgpu_overlay_captures_input()) { hold_after_capture=1; click.side=-1; reset_dodge(); reset_weapon_cycle(); return; }
+    SpartanKeyTraceRead trace=spartanport_key_trace_begin();
+    if (trace.id && hold_after_capture) trace.flags|=KT_HOLD_BEFORE;
+    sample_host(d,trace.id ? &trace : NULL);
+    if (trace.id && !(trace.flags&KT_HOST_BLOCK)) { trace.flags|=KT_HOST_Y_VALID; trace.host_y=d->left_y; }
+    if (spartanportgpu_overlay_captures_input()) {
+        hold_after_capture=1; click.side=-1; reset_dodge(); reset_weapon_cycle();
+        if (trace.id) { trace.flags|=KT_GATE_BLOCK|KT_HOLD_AFTER; spartanport_key_trace_end(trace); }
+        return;
+    }
     record_sample(d); /* the click sources as they are: a replay plays them again */
     read_inject();
     replay_sample(d);
@@ -829,6 +848,11 @@ static void sample(PadData *d) {
     if (hold_after_capture) {
         if (d->buttons) d->buttons=0;
         else hold_after_capture=0;
+    }
+    if (trace.id) {
+        trace.flags|=KT_FINAL_Y_VALID; trace.final_y=d->left_y;
+        if (hold_after_capture) trace.flags|=KT_HOLD_AFTER;
+        spartanport_key_trace_end(trace);
     }
 }
 

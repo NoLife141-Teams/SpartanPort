@@ -10,6 +10,7 @@
 #include "core/libraries/videoout/buffer.h"
 #include "video_core/renderer_vulkan/host_passes/fsr_pass.h"
 #include "video_core/renderer_vulkan/host_passes/pp_pass.h"
+#include "video_core/renderer_vulkan/gow3_frame_trace.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -98,10 +99,11 @@ public:
 
     Frame* PrepareBlankFrame(bool present_thread);
 
-    void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true);
+    void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true,
+                 Gow3::Trace::Flip trace = {});
     /// spartanport: a black frame with the loading screen (SpartanOverlay::SetLoading) only.
     void PresentLoadingFrame();
-    Frame* PrepareLastFrame();
+    Frame* PrepareLastFrame(Gow3::Trace::Flip* trace = nullptr);
 
 private:
     Frame* GetRenderFrame();
@@ -134,6 +136,7 @@ private:
     std::vector<Frame> present_frames;
     std::queue<Frame*> free_queue;
     Frame* last_submit_frame;
+    Gow3::Trace::Presentation presentation_trace; // same owner as last_submit_frame
     std::mutex free_mutex;
     std::condition_variable free_cv;
     std::condition_variable_any frame_cv;

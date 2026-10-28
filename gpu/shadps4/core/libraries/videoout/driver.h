@@ -9,6 +9,7 @@
 #include "common/debug.h"
 #include "common/polyfill_thread.h"
 #include "core/libraries/videoout/video_out.h"
+#include "video_core/renderer_vulkan/gow3_frame_trace.h"
 
 #include <condition_variable>
 #include <mutex>
@@ -102,6 +103,7 @@ private:
         s64 flip_arg;
         s32 index;
         bool eop;
+        Vulkan::Gow3::Trace::Flip trace{};
 
         operator bool() const noexcept {
             return frame != nullptr;

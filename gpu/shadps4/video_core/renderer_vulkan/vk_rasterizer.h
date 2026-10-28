@@ -9,6 +9,9 @@
 #include "video_core/page_manager.h"
 #include "video_core/renderer_vulkan/vk_bind_helper.h"
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
+#include "video_core/renderer_vulkan/gow3_camera_inputs.h"
+#include "video_core/renderer_vulkan/gow3_frame_trace.h"
+#include "video_core/renderer_vulkan/gow3_pair_capture.h"
 #include "video_core/renderer_vulkan/vk_constant_ring.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/renderer_vulkan/vk_object_motion.h"
@@ -145,6 +148,10 @@ public:
     void Finish();
     void OnSubmit();
 
+    // Called once from an accepted VideoOut request, never a presentation/redraw.
+    // Returns the same identity copied into the ordered task and VideoOut request.
+    Gow3::Flip AcceptGow3Flip(u64 address, s32 buffer, bool eop);
+
     PipelineCache& GetPipelineCache() {
         return pipeline_cache;
     }
@@ -239,7 +246,8 @@ private:
     static void RunDrawPacket(void* rasterizer, const u8* packet, u32 size);
     struct RingBinding;
     void CollectRingBindings(const Shader::Info& stage, const PreparedDraw* prepared,
-                             boost::container::static_vector<RingBinding, Shader::NUM_BUFFERS>& out);
+                             boost::container::static_vector<RingBinding, Shader::NUM_BUFFERS>& out,
+                             Gow3::SnapshotReason& camera_reason);
     void PrintPipeStats();
     /// The registers of the draw being recorded: stage B's copy there, else Liverpool's.
     const AmdGpu::Regs& Regs() const;
@@ -336,6 +344,22 @@ private:
     bool motion_draw = false;
     u64 motion_geometry{};    ///< vertex-stream identity of the current direct draw
     bool gbuffer_draw = false;
+    // Diagnostic-only; never feeds legacy camera motion, jitter or NGX.
+    bool gow3_inputs_enabled = false;
+    bool gow3_depth_draw = false;
+    Gow3::FlipSequence gow3_flips;
+    Gow3::CameraFrames gow3_frames;
+    bool gow3_trace_enabled = false;
+    Gow3::Trace::Accumulator gow3_trace;
+    std::unique_ptr<Gow3::Pair::Capture> gow3_pair;
+    bool gow3_provenance_enabled=false;
+    Gow3::Provenance::Bindings gow3_image_provenance;
+    void NoteGow3Binding(VideoCore::ImageId id,Gow3::Provenance::Path path);
+    void RecordGow3PairDraw(const RenderState& state, bool indirect, bool square);
+    void Gow3DisplayTransition(u32 color_exports, u32 bound_colors);
+    void FinishGow3Flip(Gow3::Flip flip);
+    void ObserveGow3Inputs(const Shader::Info& stage, u32 slot,
+                           const void* snapshot, size_t size);
     std::unique_ptr<TemporalUpscaler> upscaler; // spartanport: FSR (docs/upscaler.md)
     std::array<float, 2> draw_jitter{};         ///< viewport offset of the current draw, pixels
     std::array<float, 2> target_scale{1.0f, 1.0f}; ///< pass drawn into the upscaler's output-size images
@@ -507,9 +531,17 @@ private:
         const Shader::Info* info;
         const RingBinding* bindings;
         u32 count;
+        Gow3::SnapshotReason camera_reason;
     };
     std::array<RingStage, Shader::MaxStageTypes> ring_stages{};
     u32 num_ring_stages = 0;
+    Gow3::SnapshotReason FindGow3SnapshotReason(const Shader::Info& stage) const {
+        if (!num_ring_stages) return Gow3::SnapshotReason::NoPacket;
+        for (u32 i=0;i<num_ring_stages;++i) {
+            if (ring_stages[i].info == &stage) return ring_stages[i].camera_reason;
+        }
+        return Gow3::SnapshotReason::NoBinding;
+    }
     const RingBinding* FindRingBinding(const Shader::Info& stage, u32 index) const {
         for (u32 i = 0; i < num_ring_stages; ++i) {
             if (ring_stages[i].info == &stage) {

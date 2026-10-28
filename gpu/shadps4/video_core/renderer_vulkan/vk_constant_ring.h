@@ -13,6 +13,7 @@
 #include "common/assert.h"
 #include "common/types.h"
 #include "video_core/buffer_cache/buffer.h"
+#include "video_core/renderer_vulkan/constant_ring_stamps.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 namespace Vulkan {
@@ -66,26 +67,19 @@ public:
     /// Stage B, after recording a packet whose allocations end at `end`. Stamps of one
     /// submission tick are merged: only the last end per tick is published.
     void Stamp(u64 end) {
-        if (end == pending_end) {
-            return;
-        }
-        const u64 tick = scheduler.CurrentTick();
-        if (tick != pending_tick && pending_end != last_published) {
-            Publish(pending_end, pending_tick);
-        }
-        pending_end = end;
-        pending_tick = tick;
+        stamp_state.Stamp(end, scheduler.CurrentTick(),
+                          [this](u64 range_end, u64 tick) { return Publish(range_end, tick); });
     }
 
 private:
-    void Publish(u64 end, u64 tick) {
+    bool Publish(u64 end, u64 tick) {
         const u64 at = stamps_head.load(std::memory_order_relaxed);
         if (at - stamps_tail.load(std::memory_order_acquire) >= stamps.size()) {
-            return; // full: this region retires with a later stamp
+            return false; // full: this region retires with a later stamp
         }
         stamps[at % stamps.size()] = {end, tick};
         stamps_head.store(at + 1, std::memory_order_release);
-        last_published = end;
+        return true;
     }
 
     void Retire() {
@@ -108,7 +102,7 @@ private:
     VideoCore::Buffer buffer;
     u64 position = 0;     ///< stage A
     u64 retired = 0;      ///< stage A: the GPU is done with everything before this
-    u64 pending_end = 0, pending_tick = 0, last_published = 0; ///< stage B
+    ConstantRingStamps stamp_state; ///< stage B
     std::array<StampEntry, 1024> stamps{};
     alignas(64) std::atomic<u64> stamps_head{0}; ///< stage B writes
     alignas(64) std::atomic<u64> stamps_tail{0}; ///< stage A reads

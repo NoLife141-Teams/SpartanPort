@@ -53,6 +53,9 @@ struct ImageView {
     ImageView& operator=(ImageView&&) = default;
 
     ImageViewInfo info;
+    // Creation metadata after depth/storage-format fallbacks, not guest intent.
+    vk::Format created_format{};
+    vk::ImageAspectFlags created_aspects{};
     vk::UniqueImageView image_view;
 };
 
