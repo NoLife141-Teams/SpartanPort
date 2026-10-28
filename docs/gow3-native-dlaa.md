@@ -6,6 +6,8 @@ des heuristiques d'upscaling héritées. Il reste explicitement activé par proc
 
 Le chemin accepte aussi des ressources simples avec `SPARTAN_NO_MSAA=1` :
 [comparaison réelle sans AA / MSAA2 / DLAA seul en 1080p](gow3-aa-three-modes-1080p.md).
+La scène 4K avec sortie écran 1080p est également testée, OFF et DLAA seul :
+[captures finales et limites du supersampling](gow3-4k-to-1080p.md).
 Les essais MSAA2 décrits ci-dessous restent des résultats historiques.
 
 Le flou excessif observé au premier essai a été relié à un signe de jitter inversé,

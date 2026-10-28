@@ -26,11 +26,13 @@ def hashes(directory):
     return result
 
 
-def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolution='native', fullscreen=False, aa=None):
+def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolution='native', fullscreen=False, aa=None, display_capture=False):
     if motion and not pixels:
         raise ValueError('--motion requires --pixels')
     if aa is not None:
         dlaa=True  # Shared, read-only capture hook also records both DLAA-off baselines.
+    if display_capture and aa is None:
+        raise ValueError('--display-capture requires an explicit --aa mode')
     seed, game, probe = seed.resolve(), game.resolve(), probe.resolve()
     if not (game / 'eboot.bin').is_file() or not probe.is_file():
         raise ValueError('Game eboot.bin or validated probe is missing')
@@ -101,6 +103,9 @@ def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolutio
     if fullscreen and resolution=='1440p': variables['SPARTAN_FULLSCREEN_SIZE']='2560x1440'
     if aa is not None:
         variables.update(SPARTAN_NO_MSAA='0' if aa=='msaa2' else '1', SPARTAN_GOW3_AA_CAPTURE_SCENE='240')
+    if display_capture:
+        (session/'display-capture').mkdir()
+        variables.update(SPARTAN_GOW3_DISPLAY_CAPTURE=str(session/'display-capture'),SPARTAN_GPU_PROFILE='1')
     if motion:
         variables['SPARTAN_GOW3_MOTION']='1'
     dlss_files={}
@@ -137,11 +142,12 @@ def main():
     parser.add_argument('--pixels', action='store_true', help='Extract two real MSAA color/depth intervals with the first metadata trigger')
     parser.add_argument('--motion', action='store_true', help='Opt-in GoW3 GPU vertex-history diagnostic; DLAA stays off')
     parser.add_argument('--dlaa', action='store_true', help='Native GoW3 DLAA experiment; starts off, toggle with F10 or session/dlaa.switch')
-    parser.add_argument('--resolution',choices=['native','1440p'],default='native')
+    parser.add_argument('--resolution',choices=['native','1440p','4K'],default='native')
     parser.add_argument('--fullscreen',action='store_true')
     parser.add_argument('--aa',choices=['none','msaa2','dlaa'],help='Isolated AA comparison, sharpening off; automatic GPU capture at scene 240')
+    parser.add_argument('--display-capture',action='store_true',help='Capture 16 actual SDR 1080p swapchain images after downsampling, before port overlay; GPU profiling on')
     args = parser.parse_args()
-    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, args.pixels, args.motion,args.dlaa,args.resolution,args.fullscreen,args.aa)
+    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, args.pixels, args.motion,args.dlaa,args.resolution,args.fullscreen,args.aa,args.display_capture)
     if args.launch:
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(('SPARTAN_', 'GOW3_'))}
         env.update(manifest['environment'])

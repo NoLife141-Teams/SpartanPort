@@ -10,6 +10,8 @@ d'instrumentation expérimentale. **Le DLAA natif GoW3 est maintenant raccordé
 Le DLAA peut désormais fonctionner **sans MSAA** ; trois modes séparés sont
 testés en 1080p avec compte d'échantillons GPU et captures réelles :
 [sans AA, MSAA2 seul, DLAA seul](gow3-aa-three-modes-1080p.md).
+Le hook accepte aussi 3840×2160. Le [test 4K vers écran 1080p](gow3-4k-to-1080p.md)
+compare OFF/ON sur les pixels réels de la swapchain, avec une référence native.
 Le pilote autonome sans supervision reste distinct du pilotage visuel utilisé ici. Le chargement
 et une collecte sous pilotage visuel de l'agent sont désormais validés; voir
 [le protocole et les résultats réels](gow3-supervised-control.md).

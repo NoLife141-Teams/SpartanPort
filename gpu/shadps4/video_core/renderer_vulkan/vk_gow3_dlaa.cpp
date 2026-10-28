@@ -21,7 +21,7 @@
 
 namespace Vulkan {
 namespace {
-bool SupportedSize(u32 w,u32 h) { return (w==1920&&h==1080)||(w==2560&&h==1440); }
+bool SupportedSize(u32 w,u32 h) { return (w==1920&&h==1080)||(w==2560&&h==1440)||(w==3840&&h==2160); }
 float Halton(u64 n,u32 base) {
     float f=1,value=0;
     while(n) { f/=base; value+=f*float(n%base); n/=base; }
@@ -210,6 +210,7 @@ struct Gow3Dlaa::Impl {
     void Compare(vk::CommandBuffer cmd,bool filtered,const std::array<float,2>& phase) {
         if(!compare_scene||compare_issued||frame<compare_scene||dump_directory.empty()) return;
         compare_issued=true;
+        Gow3::NativeDlaaControl().comparison_ready=true;
         const u64 bytes=u64(width)*height*8;
         auto buffer=std::make_shared<VideoCore::Buffer>(instance,0,bytes*2,VideoCore::MemoryType::HostCached,"GoW3 AA comparison");
         for(u32 n=0;n<2;++n) {
@@ -296,7 +297,7 @@ Gow3Dlaa::Gow3Dlaa(const Instance& i,Scheduler& s):impl(std::make_unique<Impl>(i
     }
     impl->active=true;impl->enabled=true;ui.available=true;impl->Poll();impl->Phase();
     ui.state=impl->active?Gow3::DlaaState::Waiting:Gow3::DlaaState::Off;
-    std::puts("GoW3 DLAA: native 1080p/1440p composition hook ready, F10 toggles, 8 jitter phases");
+    std::puts("GoW3 DLAA: native 1080p/1440p/4K composition hook ready, F10 toggles, 8 jitter phases");
 }
 Gow3Dlaa::~Gow3Dlaa() {
     if(impl->initialized) { impl->scheduler.Finish();impl->dlss->ReleaseFeature(); }
