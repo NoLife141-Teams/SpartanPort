@@ -4,6 +4,9 @@ Le chemin expérimental GoW3 appelle maintenant NVIDIA NGX en mode DLAA natif
 1920×1080 vers 1920×1080 ou 2560×1440 vers 2560×1440. Il est indépendant de l'ancien extracteur caméra et
 des heuristiques d'upscaling héritées. Il reste explicitement activé par processus.
 
+Le flou excessif observé au premier essai a été relié à un signe de jitter inversé,
+puis corrigé et testé : voir [la mesure indépendante et le nouvel essai Gaia](gow3-dlaa-jitter-fix.md).
+
 ## Vecteurs mesurés dans le jeu
 
 Session `out/gow3-sessions/20261028T031012398538Z`, sauvegarde Auto Save Gaia,
@@ -52,7 +55,9 @@ profondeur R32F de l'échantillon le plus proche et mouvement RG16F. Le mouvemen
 d'objet est utilisé seulement si son historique est valide et sa profondeur
 concordante ; sinon la reprojection caméra explicite MinusWToW / viewport négatif
 fournit un repli. Un jitter Halton de huit phases déplace les viewports 3D ; les
-vecteurs restent sans jitter et NGX reçoit l'offset inverse en pixels.
+vecteurs restent sans jitter et NGX reçoit le même déplacement signé du viewport
+en pixels (origine en haut à gauche). L'ancien signe inverse a été corrigé après
+mesure indépendante de la reconstruction ; voir le diagnostic ci-dessous.
 
 NGX écrit une quatrième image RGBA16F. Un compute la développe dans une image
 MSAA2 possédée qui remplace uniquement le descripteur couleur de cette composition.
@@ -158,7 +163,7 @@ jitter de la frame active. Ce n'est donc pas une seconde exécution sans jitter.
 interpolation ; `input.png` et `output.png` restent à la résolution native.
 Ce sont des aperçus sRGB du signal linéaire avant la composition finale du jeu.
 
-Le lissage des contours est visible, mais le DLAA adoucit aussi les textures de
+Dans cet essai antérieur au correctif de jitter, le DLAA adoucit aussi les textures de
 roche, les fougères et les détails de Kratos. Ce réglage mérite encore d'être
 affiné ; une seule paire ne mesure ni le scintillement ni les traînées temporelles.
 RGB est fini, 11029281 composantes diffèrent, différence absolue moyenne linéaire

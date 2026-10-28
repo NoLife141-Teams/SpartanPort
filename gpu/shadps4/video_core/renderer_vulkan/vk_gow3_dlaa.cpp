@@ -255,7 +255,11 @@ vk::ImageView Gow3Dlaa::Process(vk::ImageView depth,vk::ImageLayout depth_layout
     const float frame_ms=p.last_evaluation.time_since_epoch().count()?std::clamp(float(std::chrono::duration<double,std::milli>(now-p.last_evaluation).count()),1.f,250.f):1000.f/60.f;
     p.last_evaluation=now;
     if(ok) ok=p.dlss->Evaluate(cmd,{.color=p.Resource(0),.depth=p.Resource(1),.motion=p.Resource(2),.output=p.Resource(3),
-        .jitter_x=-jitter[0],.jitter_y=-jitter[1],.reset=p.reset,.frame_ms=frame_ms,.sharpness=0});
+        // This is the physical viewport translation, in top-left pixel space.
+        // NGX needs that same signed translation (not the inverse sampling
+        // location). A frozen real-input replay and analytic X/Y waves show
+        // that negating it attenuates detail and leaves a subpixel phase error.
+        .jitter_x=jitter[0],.jitter_y=jitter[1],.reset=p.reset,.frame_ms=frame_ms,.sharpness=0});
     if(!ok) { p.failed=true;p.reset=true;Gow3::NativeDlaaControl().state=Gow3::DlaaState::Failed;
         std::puts("GoW3 DLAA: NGX failed; native input retained");return {}; }
     Impl::Barrier(cmd);
@@ -268,7 +272,7 @@ vk::ImageView Gow3Dlaa::Process(vk::ImageView depth,vk::ImageLayout depth_layout
     dispatch(*p.expand,*p.expand_layout,expanded,2);
     Impl::Barrier(cmd);
     if(p.reset || p.evaluated%120==0) std::printf("GoW3 DLAA: evaluated=%llu scene=%llu quality=DLAA size=%ux%u reset=%u jitter=%.6f,%.6f\n",
-        (unsigned long long)(p.evaluated+1),(unsigned long long)p.frame,w,h,p.reset,-jitter[0],-jitter[1]);
+        (unsigned long long)(p.evaluated+1),(unsigned long long)p.frame,w,h,p.reset,jitter[0],jitter[1]);
     auto& ui=Gow3::NativeDlaaControl();ui.width=w;ui.height=h;ui.state=Gow3::DlaaState::Active;
     ++p.evaluated;p.reset=false;
     return *p.images[4].view;

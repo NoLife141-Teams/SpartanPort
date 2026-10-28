@@ -398,6 +398,14 @@ target_compile_options(gow3-vulkan-depth-test PRIVATE -UNDEBUG -Wall -Wextra -We
 target_include_directories(gow3-vulkan-depth-test PRIVATE ..)
 target_link_libraries(gow3-vulkan-depth-test PRIVATE Vulkan::Vulkan)
 
+# Manual NGX diagnostic, excluded from builds/tests that do not have the optional
+# bridge and NVIDIA runtime. It replays existing captures, never starts the game.
+if(WIN32)
+    add_executable(gow3-dlaa-replay EXCLUDE_FROM_ALL ../tools/gow3_dlaa_replay.cpp)
+    target_include_directories(gow3-dlaa-replay PRIVATE ..)
+    target_link_libraries(gow3-dlaa-replay PRIVATE Vulkan::Vulkan)
+endif()
+
 # Independent offscreen copy/lifetime fixture; no game runtime dependency.
 set(GOW3_READBACK_SHADERS ${CMAKE_CURRENT_BINARY_DIR}/gow3-readback-shaders)
 set(GOW3_READBACK_OUTPUTS)

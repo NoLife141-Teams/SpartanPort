@@ -52,7 +52,7 @@ build ni l'état actuel d'une instance du jeu.
 | Santé | Hook passif opt-in et journal borné; santé informative, aucune preuve de vie/mort ni décision de contrôle. |
 | Clavier | Trace passive de S et de l'axe vertical du stick gauche, désactivée par défaut; les tests caractérisent aussi les limites du replay existant. |
 | Automatisation | Modèles et tests synthétiques. Le script de menu est attaché à une ancienne session et à une empreinte précise; ce n'est pas un pilote générique prêt à lancer. |
-| DLAA/NGX | Dispatch natif 1080p/1440p avec jitter et vecteurs GPU, testé sur Gaia par le script de session `--dlaa`. F10 bascule en jeu, badge permanent de l'état effectif. Captures réelles avant/après NGX ; lissage visible mais perte de netteté à affiner. Pas encore d'option persistante dans le lanceur standard. |
+| DLAA/NGX | Dispatch natif 1080p/1440p avec jitter et vecteurs GPU, testé sur Gaia par le script de session `--dlaa`. F10 bascule en jeu, badge permanent de l'état effectif. Le signe de jitter causant le flou a été corrigé après replay NGX et confirmé dans Gaia ; voir [le diagnostic](gow3-dlaa-jitter-fix.md). Pas encore d'option persistante dans le lanceur standard. |
 
 Les principaux diagnostics exigent des variables de processus explicites
 (`SPARTAN_GOW3_INPUT_DIAGNOSTICS`, `SPARTAN_HEALTH_PASSIVE`, `SPARTAN_KEY_TRACE`)
