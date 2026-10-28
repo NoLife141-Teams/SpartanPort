@@ -4,6 +4,10 @@ Le chemin expérimental GoW3 appelle maintenant NVIDIA NGX en mode DLAA natif
 1920×1080 vers 1920×1080 ou 2560×1440 vers 2560×1440. Il est indépendant de l'ancien extracteur caméra et
 des heuristiques d'upscaling héritées. Il reste explicitement activé par processus.
 
+Le chemin accepte aussi des ressources simples avec `SPARTAN_NO_MSAA=1` :
+[comparaison réelle sans AA / MSAA2 / DLAA seul en 1080p](gow3-aa-three-modes-1080p.md).
+Les essais MSAA2 décrits ci-dessous restent des résultats historiques.
+
 Le flou excessif observé au premier essai a été relié à un signe de jitter inversé,
 puis corrigé et testé : voir [la mesure indépendante et le nouvel essai Gaia](gow3-dlaa-jitter-fix.md).
 

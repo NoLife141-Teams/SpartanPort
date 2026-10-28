@@ -4,12 +4,20 @@
 layout(local_size_x=8,local_size_y=8) in;
 layout(binding=0) uniform texture2D filtered_color;
 layout(binding=1) uniform texture2D original_color;
+#ifdef SINGLE_SAMPLE
+layout(binding=2,rgba16f) writeonly uniform image2D multisample_out;
+#else
 layout(binding=2,rgba16f) writeonly uniform image2DMS multisample_out;
+#endif
 void main() {
     ivec2 p=ivec2(gl_GlobalInvocationID.xy),sz=imageSize(multisample_out);
     if(any(greaterThanEqual(p,sz))) return;
     vec4 c=texelFetch(filtered_color,p,0);
     c.a=texelFetch(original_color,p,0).a;
+#ifdef SINGLE_SAMPLE
+    imageStore(multisample_out,p,c);
+#else
     imageStore(multisample_out,p,0,c);
     imageStore(multisample_out,p,1,c);
+#endif
 }

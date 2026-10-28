@@ -250,11 +250,14 @@ public:
     Vulkan::Gow3::Provenance::Identity DescribeProvenance(ImageId id, vk::ImageView actual_view);
     // Revalidate both borrowed views and enqueue read-only diagnostic commands
     // while deletion is excluded. The callback must not wait/submit or enter cache.
+    // Default remains strict MSAA2 for the pixel extractor; the native DLAA hook
+    // explicitly requests e1 when guest multisampling is disabled.
     const char* WithPixelSources(const Vulkan::Gow3::Provenance::Identity& depth,
         vk::ImageLayout depth_layout, const Vulkan::Gow3::Provenance::Identity& color,
         vk::ImageLayout color_layout,
         std::array<u32,8>& sampled_components,
-        const std::function<void(vk::ImageView,vk::ImageView,u32,u32)>& record);
+        const std::function<void(vk::ImageView,vk::ImageView,u32,u32)>& record,
+        vk::SampleCountFlagBits expected_samples=vk::SampleCountFlagBits::e2);
     /// spartanport diagnostics: writes level 0 of a color image to SPARTAN_DIAG_DIR as raw pixels
     /// (<seq>_<tag>_<address>_<w>x<h>_p<pitch>_b<bytes per pixel>_f<vk format>.raw). Waits for
     /// the GPU.

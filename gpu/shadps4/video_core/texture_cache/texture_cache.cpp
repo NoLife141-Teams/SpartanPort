@@ -1870,8 +1870,11 @@ const char* TextureCache::WithPixelSources(const Vulkan::Gow3::Provenance::Ident
     vk::ImageLayout depth_layout, const Vulkan::Gow3::Provenance::Identity& color,
     vk::ImageLayout color_layout,
     std::array<u32,8>& sampled_components,
-    const std::function<void(vk::ImageView,vk::ImageView,u32,u32)>& record) {
+    const std::function<void(vk::ImageView,vk::ImageView,u32,u32)>& record,
+    vk::SampleCountFlagBits expected_samples) {
     using namespace Vulkan::Gow3::Provenance;
+    if(expected_samples!=vk::SampleCountFlagBits::e1 && expected_samples!=vk::SampleCountFlagBits::e2)
+        return "unsupported-source-samples";
     std::unique_lock guard{mutex,std::try_to_lock};
     if(!guard.owns_lock()) return "cache-busy";
     vk::ImageView views[2]{}; u32 width=0,height=0;
@@ -1906,7 +1909,7 @@ const char* TextureCache::WithPixelSources(const Vulkan::Gow3::Provenance::Ident
         sampled_components[i*4]=u32(map.r); sampled_components[i*4+1]=u32(map.g);
         sampled_components[i*4+2]=u32(map.b); sampled_components[i*4+3]=u32(map.a);
         if(bits(VkImage(backing.image.image))!=saved.image || bits(VkImageView(*view.image_view))!=saved.view ||
-           ci.format!=formats[i] || view.created_format!=formats[i] || ci.samples!=vk::SampleCountFlagBits::e2 ||
+           ci.format!=formats[i] || view.created_format!=formats[i] || ci.samples!=expected_samples ||
            !(ci.usage&vk::ImageUsageFlagBits::eSampled) || ci.imageType!=vk::ImageType::e2D ||
            ci.extent.depth!=1 || ci.arrayLayers!=1 || view.info.range.base.level || view.info.range.base.layer ||
            view.info.range.extent.levels!=1 || view.info.range.extent.layers!=1 ||

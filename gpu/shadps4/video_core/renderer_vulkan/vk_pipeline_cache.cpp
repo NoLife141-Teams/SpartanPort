@@ -232,7 +232,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
                 : 1;
         info.hw.fs.z_export_format = regs.z_export_format;
         info.hw.fs.motion_vectors = sel.motion;
-        if(sel.motion && Gow3::MotionDiagnostic()) info.hw.fs.num_samples=2;
+        if(sel.motion && Gow3::MotionDiagnostic()) info.hw.fs.num_samples=AmdGpu::NoMsaa()?1:2;
         u8 stencil_ref_export_enable = regs.depth_shader_control.stencil_op_val_export_enable |
                                        regs.depth_shader_control.stencil_test_val_export_enable;
         info.hw.fs.mrtz_mask = regs.depth_shader_control.z_export_enable |
@@ -884,7 +884,7 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         }
         const bool gow3_motion=Gow3::MotionDiagnostic() && bound==0 &&
             regs.depth_buffer.z_info.format==AmdGpu::DepthBuffer::ZFormat::Z32Float &&
-            regs.depth_buffer.NumSamples()==2 && regs.depth_control.depth_enable && regs.depth_control.depth_write_enable;
+            regs.depth_buffer.NumSamples()==(AmdGpu::NoMsaa()?1u:2u) && regs.depth_control.depth_enable && regs.depth_control.depth_write_enable;
         motion_possible = Shader::MotionVectors::positions_address != 0 && (Gow3::MotionDiagnostic()?gow3_motion:bound>=5) &&
                           !regs.color_buffers[Shader::MotionVectors::Output] &&
                           regs.depth_buffer.DepthValid() &&

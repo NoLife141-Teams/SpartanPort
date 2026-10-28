@@ -8,6 +8,7 @@
 #include <vk_mem_alloc.h>
 #include "spartanport_settings.h"
 #include "spartanport_toggles.h"
+#include "video_core/amdgpu/spartanport_msaa.h"
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -184,7 +185,7 @@ void ObjectMotion::EnsureImage(u32 width, u32 height) {
         .extent = {width, height, 1},
         .mipLevels = 1,
         .arrayLayers = 1,
-        .samples = Gow3::MotionDiagnostic()?vk::SampleCountFlagBits::e2:vk::SampleCountFlagBits::e1,
+        .samples = Gow3::MotionDiagnostic()&&!AmdGpu::NoMsaa()?vk::SampleCountFlagBits::e2:vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
                  vk::ImageUsageFlagBits::eTransferSrc,

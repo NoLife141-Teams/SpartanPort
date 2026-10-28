@@ -26,9 +26,11 @@ def hashes(directory):
     return result
 
 
-def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolution='native', fullscreen=False):
+def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolution='native', fullscreen=False, aa=None):
     if motion and not pixels:
         raise ValueError('--motion requires --pixels')
+    if aa is not None:
+        dlaa=True  # Shared, read-only capture hook also records both DLAA-off baselines.
     seed, game, probe = seed.resolve(), game.resolve(), probe.resolve()
     if not (game / 'eboot.bin').is_file() or not probe.is_file():
         raise ValueError('Game eboot.bin or validated probe is missing')
@@ -97,6 +99,8 @@ def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolutio
         (session / 'pixels').mkdir()
         variables.update(SPARTAN_GOW3_PIXELS='1', SPARTAN_GOW3_PIXEL_DIR=str(session / 'pixels'))
     if fullscreen and resolution=='1440p': variables['SPARTAN_FULLSCREEN_SIZE']='2560x1440'
+    if aa is not None:
+        variables.update(SPARTAN_NO_MSAA='0' if aa=='msaa2' else '1', SPARTAN_GOW3_AA_CAPTURE_SCENE='240')
     if motion:
         variables['SPARTAN_GOW3_MOTION']='1'
     dlss_files={}
@@ -108,7 +112,7 @@ def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolutio
         for name,source in libraries.items():
             shutil.copy2(source,session/'bin'/name)
             dlss_files[name]=hashlib.sha256((session/'bin'/name).read_bytes()).hexdigest()
-        (session/'dlaa.switch').write_text('off\n',encoding='ascii')
+        (session/'dlaa.switch').write_text('on\n' if aa=='dlaa' else 'off\n',encoding='ascii')
         (session/'dlss-capture').mkdir()
         variables.update(SPARTAN_DLSS='1',SPARTAN_GOW3_DLAA='1',
                          SPARTAN_GOW3_DLAA_SWITCH=str(session/'dlaa.switch'),
@@ -118,7 +122,7 @@ def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolutio
                     source_seed=str(seed), save_hashes=before, backup_verified=True,
                     source_probe=str(source_probe), probe=str(probe), probe_sha256=probe_hash,
                     environment=variables, cheats=dict(health=True),
-                    skip_intro_requested=True, save_load_confirmed=False,dlss_files=dlss_files)
+                    skip_intro_requested=True, save_load_confirmed=False,dlss_files=dlss_files,aa_mode=aa)
     (session / 'session.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     return session, manifest
 
@@ -135,8 +139,9 @@ def main():
     parser.add_argument('--dlaa', action='store_true', help='Native GoW3 DLAA experiment; starts off, toggle with F10 or session/dlaa.switch')
     parser.add_argument('--resolution',choices=['native','1440p'],default='native')
     parser.add_argument('--fullscreen',action='store_true')
+    parser.add_argument('--aa',choices=['none','msaa2','dlaa'],help='Isolated AA comparison, sharpening off; automatic GPU capture at scene 240')
     args = parser.parse_args()
-    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, args.pixels, args.motion,args.dlaa,args.resolution,args.fullscreen)
+    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, args.pixels, args.motion,args.dlaa,args.resolution,args.fullscreen,args.aa)
     if args.launch:
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(('SPARTAN_', 'GOW3_'))}
         env.update(manifest['environment'])

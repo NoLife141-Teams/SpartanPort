@@ -2,9 +2,14 @@
 #version 450
 #extension GL_EXT_samplerless_texture_functions : require
 layout(local_size_x=8,local_size_y=8) in;
-layout(binding=0) uniform texture2DMS scene_depth;
-layout(binding=1) uniform texture2DMS scene_color;
-layout(binding=2) uniform texture2DMS object_motion;
+#ifdef SINGLE_SAMPLE
+#define SceneTexture texture2D
+#else
+#define SceneTexture texture2DMS
+#endif
+layout(binding=0) uniform SceneTexture scene_depth;
+layout(binding=1) uniform SceneTexture scene_color;
+layout(binding=2) uniform SceneTexture object_motion;
 layout(binding=3,rgba16f) writeonly uniform image2D color_out;
 layout(binding=4,r32f) writeonly uniform image2D depth_out;
 layout(binding=5,rg16f) writeonly uniform image2D motion_out;
@@ -12,7 +17,12 @@ layout(push_constant) uniform Params { mat4 reprojection; vec2 raster_jitter; ui
 void main() {
     ivec2 p=ivec2(gl_GlobalInvocationID.xy), sz=imageSize(color_out);
     if(any(greaterThanEqual(p,sz))) return;
-    float d0=texelFetch(scene_depth,p,0).r,d1=texelFetch(scene_depth,p,1).r;
+    float d0=texelFetch(scene_depth,p,0).r;
+#ifdef SINGLE_SAMPLE
+    float d1=d0;
+#else
+    float d1=texelFetch(scene_depth,p,1).r;
+#endif
     int s=d1<d0?1:0;
     float d=min(d0,d1);
     vec2 current=vec2(p)+.5-pc.raster_jitter, flow=vec2(0);
@@ -24,7 +34,11 @@ void main() {
     vec4 m=texelFetch(object_motion,p,s);
     if(m.z>.999 && abs(m.w-d)<=2e-7 && all(lessThan(abs(m.xy),vec2(sz)))) flow=m.xy;
     if(any(isnan(flow))||any(isinf(flow))) flow=vec2(0);
+#ifdef SINGLE_SAMPLE
+    imageStore(color_out,p,texelFetch(scene_color,p,0));
+#else
     imageStore(color_out,p,(texelFetch(scene_color,p,0)+texelFetch(scene_color,p,1))*.5);
+#endif
     imageStore(depth_out,p,vec4(d));
     imageStore(motion_out,p,vec4(flow,0,0));
 }

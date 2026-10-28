@@ -1170,9 +1170,18 @@ void Rasterizer::ProcessGow3Dlaa(const GraphicsPipeline* pipeline) {
     if(!gow3_dlaa->Enabled()) return;
     const auto& key=pipeline->GetGraphicsKey();
     if(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash!=0x475a41468b1a1fbcull ||
-       pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash!=0x475a4146e3a74097ull ||
-       key.stage_hashes[u32(Shader::SwStage::Vertex)]!=0xefd04d8023fec408ull ||
-       key.stage_hashes[u32(Shader::SwStage::Fragment)]!=0xefd0530963dc1d55ull) return;
+       pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash!=0x475a4146e3a74097ull) return;
+    // The single-sample permutation was observed in the isolated 1080p no-MSAA
+    // session. Keep the exact pair and sample-specific permutation guard.
+    const u64 composition_ps=AmdGpu::NoMsaa()?0xefd0530963dc1d54ull:0xefd0530963dc1d55ull;
+    if(key.stage_hashes[u32(Shader::SwStage::Vertex)]!=0xefd04d8023fec408ull ||
+       key.stage_hashes[u32(Shader::SwStage::Fragment)]!=composition_ps) {
+        static bool reported=false;
+        if(!reported) {reported=true;std::printf("GoW3 DLAA: unapproved composition keys vs=%016llx ps=%016llx samples=%u\n",
+            (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Vertex)],
+            (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Fragment)],AmdGpu::NoMsaa()?1:2);}
+        return;
+    }
     Gow3::Provenance::Identity sources[2]{};
     vk::ImageLayout layouts[2]{};
     vk::DescriptorImageInfo* color_binding=nullptr;
@@ -1190,7 +1199,9 @@ void Rasterizer::ProcessGow3Dlaa(const GraphicsPipeline* pipeline) {
     if(found==3 && !scheduler.HasActiveRendering()) {
         std::array<u32,8> components{};
         const char* error=texture_cache.WithPixelSources(sources[0],layouts[0],sources[1],layouts[1],components,
-            [&](vk::ImageView d,vk::ImageView c,u32 width,u32 height){depth=d;color=c;w=width;h=height;});
+            [&](vk::ImageView d,vk::ImageView c,u32 width,u32 height){depth=d;color=c;w=width;h=height;},
+            AmdGpu::NoMsaa()?vk::SampleCountFlagBits::e1:vk::SampleCountFlagBits::e2);
+        if(error) {static u32 errors=0;if(errors++%120==0)std::printf("GoW3 DLAA: source rejection=%s samples=%u\n",error,AmdGpu::NoMsaa()?1:2);}
         if(!error) motion=object_motion->RecordDiagnosticRead(w,h,sources[0].uid);
     }
     const auto replacement=gow3_dlaa->Process(depth,layouts[0],color,layouts[1],motion,sources[0].uid,w,h);

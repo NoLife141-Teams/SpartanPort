@@ -8,7 +8,7 @@ namespace Vulkan {
 class Instance; class Scheduler;
 // Native GoW3 composition hook. Owns all NGX inputs/output, never rewrites guest
 // images. The game's following composition and UI passes consume a replacement
-// two-sample view with the original sampled color/alpha semantics.
+// single- or two-sample view with the original sampled color/alpha semantics.
 class Gow3Dlaa {
 public:
     Gow3Dlaa(const Instance&,Scheduler&);

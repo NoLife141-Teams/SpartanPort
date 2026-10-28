@@ -7,6 +7,9 @@ Le travail de Dot est rapatrié dans ce dépôt sur la branche
 d'instrumentation expérimentale. **Le DLAA natif GoW3 est maintenant raccordé
 à NGX et testé sur Gaia en 1080p et 1440p plein écran**, sous flag explicite : voir
 [l'essai DLAA et son mode d'emploi](gow3-native-dlaa.md).
+Le DLAA peut désormais fonctionner **sans MSAA** ; trois modes séparés sont
+testés en 1080p avec compte d'échantillons GPU et captures réelles :
+[sans AA, MSAA2 seul, DLAA seul](gow3-aa-three-modes-1080p.md).
 Le pilote autonome sans supervision reste distinct du pilotage visuel utilisé ici. Le chargement
 et une collecte sous pilotage visuel de l'agent sont désormais validés; voir
 [le protocole et les résultats réels](gow3-supervised-control.md).

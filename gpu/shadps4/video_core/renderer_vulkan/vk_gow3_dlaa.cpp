@@ -8,6 +8,9 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/host_shaders/gow3_dlaa_prepare_comp.h"
 #include "video_core/host_shaders/gow3_dlaa_expand_comp.h"
+#include "video_core/host_shaders/gow3_dlaa_prepare_single_comp.h"
+#include "video_core/host_shaders/gow3_dlaa_expand_single_comp.h"
+#include "video_core/amdgpu/spartanport_msaa.h"
 #include "video_core/host_shaders/gow3_dlaa_sharpen_comp.h"
 #include "video_core/host_shaders/gow3_dlaa_preview_comp.h"
 #include <cstdio>
@@ -43,6 +46,8 @@ struct Gow3Dlaa::Impl {
     std::filesystem::path dump_directory;
     std::unique_ptr<VideoCore::Buffer> readback;
     bool dump_issued{};
+    u64 compare_scene{};
+    bool compare_issued{};
     u32 sharpness_percent{},sequence_count{};
     u64 sequence_start{};
     bool sequence_started{};
@@ -54,7 +59,7 @@ struct Gow3Dlaa::Impl {
         vk::Format format{};
     };
     // Resolved color, nearest sample depth, motion in pixels, NGX output,
-    // the two-sample replacement consumed by the guest composition, the separate
+    // the matching-sample replacement consumed by the guest composition, the separate
     // sharpened presentation copy and a diagnostic-only low-strength snapshot.
     std::array<Owned,7> images;
     vk::UniqueDescriptorSetLayout prepare_desc,expand_desc,sharpen_desc,preview_desc;
@@ -92,7 +97,7 @@ struct Gow3Dlaa::Impl {
             auto& item=images[n]; item.format=formats[n];
             item.image=VideoCore::UniqueImage(device,instance.GetAllocator());
             item.image.Create({.imageType=vk::ImageType::e2D,.format=item.format,.extent={width,height,1},
-                .mipLevels=1,.arrayLayers=1,.samples=n==4?vk::SampleCountFlagBits::e2:vk::SampleCountFlagBits::e1,
+                .mipLevels=1,.arrayLayers=1,.samples=n==4&&!AmdGpu::NoMsaa()?vk::SampleCountFlagBits::e2:vk::SampleCountFlagBits::e1,
                 .tiling=vk::ImageTiling::eOptimal,
                 .usage=vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst,
                 .initialLayout=vk::ImageLayout::eUndefined});
@@ -120,8 +125,8 @@ struct Gow3Dlaa::Impl {
             return Check(device.createComputePipelineUnique({}, {.stage={.stage=vk::ShaderStageFlagBits::eCompute,
                 .module=*module,.pName="main"},.layout=l}));
         };
-        prepare=pipeline(GOW3_DLAA_PREPARE_COMP,*prepare_layout);
-        expand=pipeline(GOW3_DLAA_EXPAND_COMP,*expand_layout);
+        prepare=pipeline(AmdGpu::NoMsaa()?std::span<const u32>(GOW3_DLAA_PREPARE_SINGLE_COMP):std::span<const u32>(GOW3_DLAA_PREPARE_COMP),*prepare_layout);
+        expand=pipeline(AmdGpu::NoMsaa()?std::span<const u32>(GOW3_DLAA_EXPAND_SINGLE_COMP):std::span<const u32>(GOW3_DLAA_EXPAND_COMP),*expand_layout);
         sharpen=pipeline(GOW3_DLAA_SHARPEN_COMP,*sharpen_layout);
         preview=pipeline(GOW3_DLAA_PREVIEW_COMP,*preview_layout);
         initialized=true;
@@ -200,6 +205,43 @@ struct Gow3Dlaa::Impl {
         });
         Barrier(cmd);
     }
+    // Read back the same composition boundary in each isolated AA session. The
+    // off paths copy their prepared input without replacing the guest binding.
+    void Compare(vk::CommandBuffer cmd,bool filtered,const std::array<float,2>& phase) {
+        if(!compare_scene||compare_issued||frame<compare_scene||dump_directory.empty()) return;
+        compare_issued=true;
+        const u64 bytes=u64(width)*height*8;
+        auto buffer=std::make_shared<VideoCore::Buffer>(instance,0,bytes*2,VideoCore::MemoryType::HostCached,"GoW3 AA comparison");
+        for(u32 n=0;n<2;++n) {
+            const vk::BufferImageCopy region{.bufferOffset=n*bytes,
+                .imageSubresource={vk::ImageAspectFlagBits::eColor,0,0,1},.imageExtent={width,height,1}};
+            cmd.copyImageToBuffer(vk::Image(images[n&&filtered?3:0].image),vk::ImageLayout::eGeneral,buffer->Handle(),region);
+        }
+        const vk::MemoryBarrier2 host{.srcStageMask=vk::PipelineStageFlagBits2::eTransfer,
+            .srcAccessMask=vk::AccessFlagBits2::eTransferWrite,.dstStageMask=vk::PipelineStageFlagBits2::eHost,
+            .dstAccessMask=vk::AccessFlagBits2::eHostRead};
+        cmd.pipelineBarrier2({.memoryBarrierCount=1,.pMemoryBarriers=&host});
+        const auto tick=scheduler.CurrentTick(),scene=frame,count=evaluated+(filtered?1:0);
+        scheduler.DeferOperation([buffer,directory=dump_directory,bytes,w=width,h=height,tick,scene,count,
+            filtered,phase,vp=camera.current,samples=AmdGpu::NoMsaa()?1:2] {
+            buffer->Invalidate(0,bytes*2);bool ok=true;
+            for(u32 n=0;n<2;++n) {
+                auto* f=std::fopen((directory/(n?"compare-output.rgba16f":"compare-input.rgba16f")).string().c_str(),"wbx");
+                if(!f){ok=false;continue;}
+                const bool written=std::fwrite(buffer->mapped_data.data()+n*bytes,1,bytes,f)==bytes;
+                const bool closed=std::fclose(f)==0;ok &= written&&closed;
+            }
+            auto* f=std::fopen((directory/"compare.json").string().c_str(),"wbx");
+            if(f) {
+                std::fprintf(f,"{\"complete\":%s,\"gpu_complete\":true,\"scene\":%llu,\"tick\":%llu,\"evaluated\":%llu,\"width\":%u,\"height\":%u,\"samples\":%u,\"dlaa\":%s,\"sharpness\":0,\"jitter\":[%.9g,%.9g],\"camera_vp\":[",
+                    ok?"true":"false",(unsigned long long)scene,(unsigned long long)tick,(unsigned long long)count,w,h,samples,filtered?"true":"false",filtered?phase[0]:0.f,filtered?phase[1]:0.f);
+                for(u32 n=0;n<16;++n) std::fprintf(f,"%s%.17g",n?",":"",vp[n]);
+                std::fputs("]}\n",f);std::fclose(f);
+            }
+            std::printf("GoW3 AA: GPU comparison complete=%u samples=%u dlaa=%u scene=%llu\n",ok,samples,filtered,(unsigned long long)scene);
+        });
+        Barrier(cmd);
+    }
     void Dump(vk::CommandBuffer cmd) {
         if(dump_directory.empty() || dump_issued || evaluated<32 ||
            !std::filesystem::is_regular_file(dump_directory/"capture.trigger")) return;
@@ -242,11 +284,12 @@ Gow3Dlaa::Gow3Dlaa(const Instance& i,Scheduler& s):impl(std::make_unique<Impl>(i
     if(!Gow3::NativeDlaaRequested()) return;
     auto& ui=Gow3::NativeDlaaControl();ui.visible=true;
     impl->dlss=Dlss::Get();
-    if(!impl->dlss || !impl->dlss->Available() || !i.GetPhysicalDevice().getFeatures().shaderStorageImageMultisample) {
+    if(!impl->dlss || !impl->dlss->Available() || (!AmdGpu::NoMsaa()&&!i.GetPhysicalDevice().getFeatures().shaderStorageImageMultisample)) {
         ui.state=Gow3::DlaaState::Unavailable;
         std::puts("GoW3 DLAA: unavailable (NGX or multisample storage missing)"); return;
     }
     if(const char* value=std::getenv("SPARTAN_GOW3_DLAA_SWITCH")) impl->control=value;
+    if(const char* value=std::getenv("SPARTAN_GOW3_AA_CAPTURE_SCENE")) impl->compare_scene=std::strtoull(value,nullptr,10);
     if(const char* value=std::getenv("SPARTAN_GOW3_DLAA_DUMP")) {
         const std::filesystem::path path(value);
         if(path.is_absolute()&&std::filesystem::is_directory(path)&&std::filesystem::is_empty(path)) impl->dump_directory=path;
@@ -284,7 +327,8 @@ vk::ImageView Gow3Dlaa::Process(vk::ImageView depth,vk::ImageLayout depth_layout
     const auto status=p.camera.FinishFrame();
     const bool active=Active();
     ++p.frame;p.Phase();p.Poll();
-    if(!active || !depth || !color || !motion || depth_uid!=p.depth || !SupportedSize(w,h) ||
+    const bool comparison=p.compare_scene&&!p.compare_issued&&p.frame>=p.compare_scene;
+    if((!active&&!comparison) || !depth || !color || !motion || depth_uid!=p.depth || !SupportedSize(w,h) ||
        (p.initialized && (w!=p.width || h!=p.height)) ||
        status!=Gow3::Status::Candidate) {
         Gow3::NativeDlaaControl().state=p.failed?Gow3::DlaaState::Failed:
@@ -300,7 +344,7 @@ vk::ImageView Gow3Dlaa::Process(vk::ImageView depth,vk::ImageLayout depth_layout
     // NGX changes compute bindings, followed by explicit bindings for expansion.
     // Sampling an sRGB view decoded the input to linear RGB. NGX requires its
     // HDR processing flag for linear input, including an SDR display pipeline.
-    if(!p.dlss->HasFeature({w,h,w,h,0,true})) p.scheduler.WaitSubmitted();
+    if(active&&!p.dlss->HasFeature({w,h,w,h,0,true})) p.scheduler.WaitSubmitted();
     auto cmd=p.scheduler.CommandBuffer();
     if(first) for(auto& item:p.images) {
         const vk::ImageMemoryBarrier2 b{.srcStageMask=vk::PipelineStageFlagBits2::eTopOfPipe,
@@ -311,7 +355,7 @@ vk::ImageView Gow3Dlaa::Process(vk::ImageView depth,vk::ImageLayout depth_layout
         cmd.pipelineBarrier2({.imageMemoryBarrierCount=1,.pImageMemoryBarriers=&b});
     }
     Impl::Barrier(cmd);
-    PrepareParams params;params.jitter=jitter;params.valid=1;
+    PrepareParams params;params.jitter=active?jitter:std::array<float,2>{};params.valid=1;
     for(u32 c=0;c<4;++c) for(u32 r=0;r<4;++r) {
         double v=0;for(u32 k=0;k<4;++k) v+=p.camera.previous[k*4+r]*p.camera.inverse[c*4+k];
         params.reprojection[c*4+r]=float(v);
@@ -333,6 +377,7 @@ vk::ImageView Gow3Dlaa::Process(vk::ImageView depth,vk::ImageLayout depth_layout
     cmd.pushConstants(*p.prepare_layout,vk::ShaderStageFlagBits::eCompute,0,sizeof(params),&params);
     dispatch(*p.prepare,*p.prepare_layout,general,3);
     Impl::Barrier(cmd);
+    if(!active) { p.Compare(cmd,false,{});return {}; }
     const Dlss::FeatureDesc desc{w,h,w,h,0,true};
     bool ok=p.dlss->HasFeature(desc)||p.dlss->CreateFeature(cmd,desc);
     const auto now=std::chrono::steady_clock::now();
@@ -347,6 +392,7 @@ vk::ImageView Gow3Dlaa::Process(vk::ImageView depth,vk::ImageLayout depth_layout
     if(!ok) { p.failed=true;p.reset=true;Gow3::NativeDlaaControl().state=Gow3::DlaaState::Failed;
         std::puts("GoW3 DLAA: NGX failed; native input retained");return {}; }
     Impl::Barrier(cmd);
+    p.Compare(cmd,true,jitter);
     p.Dump(cmd);
     p.Sequence(cmd);
     Impl::Barrier(cmd);
