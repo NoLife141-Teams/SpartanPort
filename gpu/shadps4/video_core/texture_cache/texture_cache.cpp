@@ -1866,6 +1866,66 @@ void TextureCache::DeleteImage(ImageId image_id) {
     });
 }
 
+const char* TextureCache::WithPixelSources(const Vulkan::Gow3::Provenance::Identity& depth,
+    vk::ImageLayout depth_layout, const Vulkan::Gow3::Provenance::Identity& color,
+    vk::ImageLayout color_layout,
+    std::array<u32,8>& sampled_components,
+    const std::function<void(vk::ImageView,vk::ImageView,u32,u32)>& record) {
+    using namespace Vulkan::Gow3::Provenance;
+    std::unique_lock guard{mutex,std::try_to_lock};
+    if(!guard.owns_lock()) return "cache-busy";
+    vk::ImageView views[2]{}; u32 width=0,height=0;
+    const Identity* identities[2]={&depth,&color};
+    const vk::ImageLayout layouts[2]={depth_layout,color_layout};
+    const vk::Format formats[2]={vk::Format::eD32SfloatS8Uint,vk::Format::eR8G8B8A8Srgb};
+    const auto bits=[](auto handle) { u64 value{}; std::memcpy(&value,&handle,sizeof(handle)); return value; };
+    for(u32 i=0;i<2;++i) {
+        const auto& saved=*identities[i]; const ImageId id{saved.slot};
+        if(saved.resolution!=Resolution::NativeView || !saved.uid || !saved.current_backing ||
+           !saved.backing_ordinal || !saved.view_ordinal || !slot_images.is_allocated(id)) return "unresolved-source";
+        const auto& image=slot_images[id];
+        if(image.image_uid!=saved.uid || False(image.flags&ImageFlagBits::Registered) ||
+           image.scene_proxy || image.binding.is_target || image.alias_generation!=saved.alias_authority_generation ||
+           saved.backing_ordinal>image.backing_images.size()) return "source-changed-or-target";
+        const auto& backing=image.backing_images[saved.backing_ordinal-1];
+        if(&backing!=image.backing || saved.view_ordinal>backing.image_view_ids.size() ||
+           !backing.subresource_states.empty()) return "backing-or-subresource-state";
+        const auto view_id=backing.image_view_ids[saved.view_ordinal-1];
+        if(view_id.index!=saved.view_slot) return "view-slot-changed";
+        const auto& view=slot_image_views[view_id]; const auto& ci=backing.image.image_ci;
+        if(view.info.is_storage || view.info.min_lod ||
+           (view.info.type!=AmdGpu::ImageType::Color2D && view.info.type!=AmdGpu::ImageType::Color2DMsaa))
+            return "unsupported-view-type-or-lod";
+        const auto component=[](vk::ComponentSwizzle actual,vk::ComponentSwizzle expected) {
+            return actual==vk::ComponentSwizzle::eIdentity || actual==expected;
+        };
+        const auto& map=view.info.mapping;
+        if(i==0 && !component(map.r,vk::ComponentSwizzle::eR)) return "non-depth-r-swizzle";
+        // Preserve the actual sampled-view semantics, including BGR and constant
+        // alpha. These are declared in the journal, never called stored RGBA bytes.
+        sampled_components[i*4]=u32(map.r); sampled_components[i*4+1]=u32(map.g);
+        sampled_components[i*4+2]=u32(map.b); sampled_components[i*4+3]=u32(map.a);
+        if(bits(VkImage(backing.image.image))!=saved.image || bits(VkImageView(*view.image_view))!=saved.view ||
+           ci.format!=formats[i] || view.created_format!=formats[i] || ci.samples!=vk::SampleCountFlagBits::e2 ||
+           !(ci.usage&vk::ImageUsageFlagBits::eSampled) || ci.imageType!=vk::ImageType::e2D ||
+           ci.extent.depth!=1 || ci.arrayLayers!=1 || view.info.range.base.level || view.info.range.base.layer ||
+           view.info.range.extent.levels!=1 || view.info.range.extent.layers!=1 ||
+           view.created_aspects!=(i==0?vk::ImageAspectFlagBits::eDepth:vk::ImageAspectFlagBits::eColor) ||
+           backing.state.layout!=layouts[i]) return "unsupported-view-format-layout";
+        if(layouts[i]!=vk::ImageLayout::eGeneral && layouts[i]!=vk::ImageLayout::eShaderReadOnlyOptimal &&
+           !(i==0 && (layouts[i]==vk::ImageLayout::eDepthStencilReadOnlyOptimal ||
+                      layouts[i]==vk::ImageLayout::eDepthReadOnlyOptimal))) return "non-readable-layout";
+        if(i==0) { width=ci.extent.width; height=ci.extent.height; }
+        else if(width!=ci.extent.width || height!=ci.extent.height || depth.image==color.image) return "source-dimensions";
+        views[i]=*view.image_view;
+    }
+    // DeleteImage takes this mutex and defers destruction to CurrentTick().
+    // Enqueuing here puts these reads before any later deletion tick. No source
+    // pointer escapes, and no GPU wait or pending-operation lock occurs here.
+    record(views[0],views[1],width,height);
+    return nullptr;
+}
+
 Vulkan::Gow3::Provenance::Identity TextureCache::DescribeProvenance(ImageId id, vk::ImageView actual_view) {
     using namespace Vulkan::Gow3::Provenance;
     Identity result;

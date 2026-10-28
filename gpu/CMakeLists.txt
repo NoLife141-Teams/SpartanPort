@@ -115,6 +115,7 @@ add_host_shader(fsr.comp fsr_easu_comp SAMPLE_EASU=1)
 add_host_shader(fsr.comp fsr_rcas_comp SAMPLE_RCAS=1)
 add_host_shader(post_process.frag post_process_frag)
 add_host_shader(camera_motion.comp camera_motion_comp)
+add_host_shader(gow3_pixel_extract.comp gow3_pixel_extract_comp)
 add_host_shader(upscale_merge.comp upscale_merge_comp)
 add_host_shader(upscale_reactive.comp upscale_reactive_comp)
 add_host_shader(taa.comp taa_comp)
@@ -401,7 +402,13 @@ foreach(STAGE vert frag comp)
         DEPENDS ../tests/shaders/gow3_readback_fixture.${STAGE} VERBATIM)
     list(APPEND GOW3_READBACK_OUTPUTS ${OUTPUT})
 endforeach()
+add_custom_command(OUTPUT ${GOW3_READBACK_SHADERS}/runtime.comp.spv
+    COMMAND ${GLSLANG_COMPILER} --target-env vulkan1.2 -V
+            ${SHADER_SRC}/gow3_pixel_extract.comp -o ${GOW3_READBACK_SHADERS}/runtime.comp.spv
+    DEPENDS ${SHADER_SRC}/gow3_pixel_extract.comp VERBATIM)
 add_executable(gow3-vulkan-readback-test EXCLUDE_FROM_ALL ../tests/test_gow3_vulkan_readback.cpp
+               shadps4/video_core/renderer_vulkan/gow3_pixel_extract.cpp
+               ${GOW3_READBACK_SHADERS}/runtime.comp.spv
                ${GOW3_READBACK_OUTPUTS})
 target_compile_options(gow3-vulkan-readback-test PRIVATE -UNDEBUG -Wall -Wextra -Werror
                        -Wno-missing-field-initializers)

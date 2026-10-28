@@ -26,7 +26,7 @@ def hashes(directory):
     return result
 
 
-def prepare(seed, game, probe):
+def prepare(seed, game, probe, pixels=False):
     seed, game, probe = seed.resolve(), game.resolve(), probe.resolve()
     if not (game / 'eboot.bin').is_file() or not probe.is_file():
         raise ValueError('Game eboot.bin or validated probe is missing')
@@ -90,6 +90,9 @@ def prepare(seed, game, probe):
         'SPARTAN_UI_KEY_BUFFER': '1',
         'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1', 'PYTHONIOENCODING': 'utf-8',
     }
+    if pixels:
+        (session / 'pixels').mkdir()
+        variables.update(SPARTAN_GOW3_PIXELS='1', SPARTAN_GOW3_PIXEL_DIR=str(session / 'pixels'))
     manifest = dict(schema='gow3-supervised-session-v1', session=str(session),
                     prepared_utc=datetime.now(timezone.utc).isoformat(),
                     source_seed=str(seed), save_hashes=before, backup_verified=True,
@@ -106,8 +109,9 @@ def main():
     parser.add_argument('--game-dir', type=Path, required=True)
     parser.add_argument('--probe', type=Path, default=ROOT / 'out/verification/dot-build/spartanport-probe.exe')
     parser.add_argument('--launch', action='store_true')
+    parser.add_argument('--pixels', action='store_true', help='Extract two real MSAA color/depth intervals with the first metadata trigger')
     args = parser.parse_args()
-    session, manifest = prepare(args.seed_data, args.game_dir, args.probe)
+    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, args.pixels)
     if args.launch:
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(('SPARTAN_', 'GOW3_'))}
         env.update(manifest['environment'])

@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "../gpu/shadps4/video_core/renderer_vulkan/gow3_pixel_extract.h"
 
 namespace {
 constexpr uint32_t W=64,H=48;
@@ -244,6 +245,9 @@ struct Output {
 struct Batch {
     Context& c; Fixture& f; std::shared_ptr<Images> source;
     std::array<std::shared_ptr<Images>,2> snapshots;
+    std::unique_ptr<Vulkan::Gow3::Pixels::Extractor> runtime;
+    std::array<std::unique_ptr<Vulkan::Gow3::Pixels::Extractor::Output>,2> real_outputs;
+    VkImageView swizzled{};
     std::array<std::unique_ptr<Output>,5> outputs; // copies A/B, live C, references A/B
     VkDescriptorPool descriptors{}; VkCommandBuffer cmd{}; VkFence fence{}; VkSemaphore gate{};
     bool submitted{},released{},completed{}; double held_ms{};
@@ -261,11 +265,13 @@ struct Batch {
             std::fprintf(stderr,"FAIL owned GPU work did not complete: %d; exiting without unsafe teardown\n",int(r)); std::fflush(nullptr); std::_Exit(3);
         }
         completed=true;
+        if(runtime) for(auto& out:real_outputs) runtime->MarkCompleted(*out);
     }
     ~Batch() {
         // Even an assertion/exception while gated must release and retire this
         // fixture's work before any RAII child destroys an image or buffer.
         try { Complete(); } catch(...) { std::fflush(nullptr); std::_Exit(3); }
+        if(swizzled) vkDestroyImageView(c.device,swizzled,nullptr);
         if(cmd) vkFreeCommandBuffers(c.device,c.pool,1,&cmd); if(fence) vkDestroyFence(c.device,fence,nullptr); if(gate) vkDestroySemaphore(c.device,gate,nullptr);
         if(descriptors) vkDestroyDescriptorPool(c.device,descriptors,nullptr);
     }
@@ -306,14 +312,21 @@ struct Batch {
         out.host.Barrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_HOST_BIT,VK_ACCESS_HOST_READ_BIT);
     }
     void Record(uint32_t first_frame) {
+        VkImageViewCreateInfo alias{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        alias.image=source->color.image; alias.viewType=VK_IMAGE_VIEW_TYPE_2D; alias.format=ColorFormat;
+        alias.components={VK_COMPONENT_SWIZZLE_B,VK_COMPONENT_SWIZZLE_G,VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_ONE};
+        alias.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+        Check(vkCreateImageView(c.device,&alias,nullptr,&swizzled),"swizzled runtime source view");
         for(unsigned i=0;i<2;++i) { snapshots[i]=std::make_shared<Images>(c,source->logical,source->generation); snapshots[i]->Create(VK_NULL_HANDLE); }
         for(unsigned i=0;i<5;++i) outputs[i]=std::make_unique<Output>(c,Token{first_frame+(i<3?i:i-3),source->logical,source->generation,0});
         const std::array<VkDescriptorPoolSize,2> sizes{{{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,15},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,5}}};
         VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; dp.maxSets=5; dp.poolSizeCount=2; dp.pPoolSizes=sizes.data(); Check(vkCreateDescriptorPool(c.device,&dp,nullptr,&descriptors),"descriptor pool");
         VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; alloc.commandPool=c.pool; alloc.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY; alloc.commandBufferCount=1; Check(vkAllocateCommandBuffers(c.device,&alloc,&cmd),"commands");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; Check(vkBeginCommandBuffer(cmd,&begin),"begin");
-        Render(first_frame); SourceReadable(); Extract(*outputs[3],*source); Copy(*snapshots[0]);
-        Render(first_frame+1); SourceReadable(); Extract(*outputs[4],*source); Copy(*snapshots[1]);
+        Render(first_frame); SourceReadable(); Extract(*outputs[3],*source);
+        runtime->Record(cmd,*real_outputs[0],{source->depth.sampled,source->depth.layout},{swizzled,source->color.layout}); Copy(*snapshots[0]);
+        Render(first_frame+1); SourceReadable(); Extract(*outputs[4],*source);
+        runtime->Record(cmd,*real_outputs[1],{source->depth.sampled,source->depth.layout},{source->color.sampled,source->color.layout}); Copy(*snapshots[1]);
         Render(first_frame+2); SourceReadable();
         // Read both retained copies only AFTER the live producer has been overwritten.
         Extract(*outputs[0],*snapshots[0]); Extract(*outputs[1],*snapshots[1]); Extract(*outputs[2],*source);
@@ -407,6 +420,13 @@ int main(int argc,char** argv) {
     try {
         Require(argc==2,"usage: gow3-vulkan-readback-test <synthetic shader directory>");
         Context c; c.Initialize(); Fixture fixture(c); fixture.Create(argv[1]); Stats stats;
+        std::ifstream shader(std::filesystem::path(argv[1])/"runtime.comp.spv",std::ios::binary|std::ios::ate);
+        Require(bool(shader),"runtime shader unavailable"); const auto shader_bytes=shader.tellg();
+        Require(shader_bytes>0 && shader_bytes%4==0 && shader_bytes<1024*1024,"runtime shader size");
+        std::vector<uint32_t> runtime_spv(size_t(shader_bytes)/4); shader.seekg(0); shader.read(reinterpret_cast<char*>(runtime_spv.data()),shader_bytes);
+        Require(bool(shader),"runtime shader read");
+        Require(Vulkan::Gow3::Pixels::ByteSize(1920,1080)==82944000 &&
+                Vulkan::Gow3::Pixels::ByteSize(0,1)==0 && Vulkan::Gow3::Pixels::ByteSize(1921,1080)==0,"pixel dimension bounds");
         unsigned delayed=0,retired=0,early_rejected=0,overwrite_controls=0,exact_copies=0;
         for(uint32_t generation=1;generation<=2;++generation) {
             // Same logical identity, distinct allocation generation. Never infer
@@ -414,7 +434,14 @@ int main(int argc,char** argv) {
             auto registry=std::make_shared<Images>(c,42,generation); registry->Create(fixture.pass);
             std::weak_ptr<Images> weak=registry;
             {
-                Batch batch(c,fixture,registry); batch.Record(1+(generation-1)*3); batch.SubmitHeld(); ++delayed;
+                Batch batch(c,fixture,registry);
+                batch.runtime=std::make_unique<Vulkan::Gow3::Pixels::Extractor>(c.device,vkGetDeviceProcAddr,c.memory,c.properties.limits.maxStorageBufferRange,runtime_spv);
+                for(auto& out:batch.real_outputs) out=batch.runtime->Allocate(W,H);
+                bool cap=false; try { batch.runtime->Allocate(W,H); } catch(const std::exception&) { cap=true; }
+                Require(cap,"runtime third allocation accepted");
+                batch.Record(1+(generation-1)*3); batch.SubmitHeld(); ++delayed;
+                bool blocked=false; try { batch.runtime->ReadCompleted(*batch.real_outputs[0]); } catch(const std::exception&) { blocked=true; }
+                Require(blocked,"runtime premature read accepted");
                 registry.reset(); Require(!weak.expired(),"source destroyed while GPU held");
                 std::vector<Sample> premature; Require(!batch.TryRead(0,premature) && premature.empty(),"premature read was not rejected"); ++early_rejected;
                 std::printf("PASS gated_ms=%.3f owner_removed=true retained_until_fence=true premature_read=rejected\n",batch.held_ms);
@@ -423,6 +450,16 @@ int main(int argc,char** argv) {
                 for(unsigned i=0;i<2;++i) {
                     Require(batch.TryRead(i+3,values[i+3]),"reference read rejected");
                     Require(std::memcmp(values[i].data(),values[i+3].data(),OutputBytes)==0,"copy differs bitwise from pre-copy reference"); ++exact_copies;
+                    const auto raw=batch.runtime->ReadCompleted(*batch.real_outputs[i]);
+                    Require(raw.size()==W*H*2*5*sizeof(float),"runtime output size");
+                    for(size_t n=0;n<values[i].size();++n) {
+                        std::array<float,5> pixel{}; std::memcpy(pixel.data(),raw.data()+n*sizeof(pixel),sizeof(pixel));
+                        auto expected=values[i][n].linear;
+                        if(i==0) { std::swap(expected[0],expected[2]); expected[3]=1; }
+                        Require(std::memcmp(pixel.data(),expected.data(),4*sizeof(float))==0 &&
+                                pixel[4]==values[i][n].depth_pixel[0],"production extraction differs from independent fixture");
+                    }
+                    std::printf("PASS production extractor frame=%u samples=%zu float-bits-match=true BGR1-view=%u later-overwrite-preserved=true\n",batch.outputs[i]->token[0],values[i].size(),i==0);
                 }
                 // Independent live-source read proves the producer was overwritten;
                 // forging old metadata cannot make that new content pass as frame A.

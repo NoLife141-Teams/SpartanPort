@@ -12,6 +12,7 @@
 #include "video_core/renderer_vulkan/gow3_camera_inputs.h"
 #include "video_core/renderer_vulkan/gow3_frame_trace.h"
 #include "video_core/renderer_vulkan/gow3_pair_capture.h"
+#include "video_core/renderer_vulkan/gow3_pixel_capture.h"
 #include "video_core/renderer_vulkan/vk_constant_ring.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/renderer_vulkan/vk_object_motion.h"
@@ -352,6 +353,8 @@ private:
     bool gow3_trace_enabled = false;
     Gow3::Trace::Accumulator gow3_trace;
     std::unique_ptr<Gow3::Pair::Capture> gow3_pair;
+    Gow3::Pixels::Capture* gow3_pixels=nullptr; // opt-in bounded process-lifetime sink
+    void RecordGow3Pixels();
     bool gow3_provenance_enabled=false;
     Gow3::Provenance::Bindings gow3_image_provenance;
     void NoteGow3Binding(VideoCore::ImageId id,Gow3::Provenance::Path path);

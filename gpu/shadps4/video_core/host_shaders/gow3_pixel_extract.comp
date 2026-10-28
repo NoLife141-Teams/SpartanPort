@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0) uniform texture2DMS depth_image;
+layout(binding=1) uniform texture2DMS color_image;
+layout(binding=2,std430) writeonly buffer Output { uint words[]; } output_data;
+layout(push_constant) uniform Size { uint width; uint height; } size;
+void main() {
+    uvec2 p=gl_GlobalInvocationID.xy;
+    if(p.x>=size.width || p.y>=size.height) return;
+    for(uint sample_index=0;sample_index<2;++sample_index) {
+        uint base=((p.y*size.width+p.x)*2+sample_index)*5;
+        vec4 color=texelFetch(color_image,ivec2(p),int(sample_index));
+        float depth=texelFetch(depth_image,ivec2(p),int(sample_index)).r;
+        output_data.words[base+0]=floatBitsToUint(color.r);
+        output_data.words[base+1]=floatBitsToUint(color.g);
+        output_data.words[base+2]=floatBitsToUint(color.b);
+        output_data.words[base+3]=floatBitsToUint(color.a);
+        output_data.words[base+4]=floatBitsToUint(depth);
+    }
+}

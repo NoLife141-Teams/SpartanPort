@@ -79,6 +79,12 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     if (gow3_inputs_enabled) {
         std::printf("GoW3 inputs: diagnostic only; DLAA disabled, stable ring snapshots required\n");
     }
+    if(gow3_provenance_enabled && Gow3::Provenance::Requested(std::getenv("SPARTAN_GOW3_PIXELS"))) {
+        try {
+            gow3_pixels=new Gow3::Pixels::Capture(instance,std::getenv("SPARTAN_GOW3_PIXEL_DIR"));
+            scheduler.SetDiagnosticSubmitCallback([sink=gow3_pixels](u64 tick,vk::Result result) { sink->Submit(tick,result); });
+        } catch(const std::exception& error) { std::printf("GoW3 pixels: disabled: %s\n",error.what()); }
+    }
     // Before the rasterizer is bound: Liverpool enqueues buffers only once it sees it.
     draw_prep = std::make_unique<DrawPreparation>(pipeline_cache);
     scene_targets = std::make_unique<SceneTargets>(instance, scheduler, runtime, texture_cache);
@@ -1123,6 +1129,33 @@ Gow3::Pair::Attachment PairAttachment(const VideoCore::Image& image, vk::ImageVi
 }
 }
 
+void Rasterizer::RecordGow3Pixels() {
+    const auto* row=gow3_pair ? gow3_pair->Pending() : nullptr;
+    if(!gow3_pixels || !row || !Gow3::Pixels::Capture::Target(*row)) return;
+    Gow3::Provenance::Identity sources[2]{}; vk::ImageLayout layouts[2]{};
+    u32 found=0;
+    for(const auto& w:set_writes) {
+        if(w.dstBinding<1 || w.dstBinding>2 || w.dstArrayElement || w.descriptorCount!=1 ||
+           w.descriptorType!=vk::DescriptorType::eSampledImage || !w.pImageInfo) continue;
+        const auto& info=*w.pImageInfo;
+        if(&info<image_infos.data() || &info>=image_infos.data()+image_infos.size()) continue;
+        const auto index=w.dstBinding-1;
+        const auto binding=gow3_image_provenance.Get(row->serial,row->interval,
+            u32(&info-image_infos.data()),PairHandleBits(VkImageView(info.imageView)));
+        if(!binding.observed || (found&(1u<<index))) { found=0; break; }
+        sources[index]=binding.resource; layouts[index]=info.imageLayout; found|=1u<<index;
+    }
+    bool allowed=found==3 && !upscaler->Enabled() && !camera_motion->Enabled() &&
+        target_scale[0]==1.f && target_scale[1]==1.f;
+    // Reject a sampled source also bound as an attachment, including distinct views.
+    for(const auto& color:cb_descs) if(color.first)
+        allowed &= texture_cache.GetImage(color.first).image_uid!=sources[0].uid &&
+                   texture_cache.GetImage(color.first).image_uid!=sources[1].uid;
+    if(db_desc.first) allowed &= texture_cache.GetImage(db_desc.first).image_uid!=sources[0].uid &&
+                               texture_cache.GetImage(db_desc.first).image_uid!=sources[1].uid;
+    gow3_pixels->Record(*row,sources[0],layouts[0],sources[1],layouts[1],scheduler,texture_cache,allowed);
+}
+
 void Rasterizer::RecordGow3PairDraw(const RenderState& state, bool indirect, bool square) {
     auto* row=gow3_pair ? gow3_pair->Pending() : nullptr;
     if (!row) return;
@@ -1254,6 +1287,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     }
 
     // spartanport: screen-space (clip disabled) draws into the upscaler's output-size images.
+    RecordGow3Pixels();
     push_data.xscale *= target_scale[0];
     push_data.xoffset *= target_scale[0];
     push_data.yscale *= target_scale[1];
@@ -1737,6 +1771,8 @@ void Rasterizer::FinishGow3Flip(Gow3::Flip flip) {
     if(gow3_provenance_enabled)
         gow3_pair->ProvenanceEvents(texture_cache.DrainProvenance(),"before_accepted_flip",flip.id);
     if (gow3_pair) gow3_pair->Boundary(flip,frame->number,frame->status);
+    if(gow3_pixels) gow3_pixels->Boundary(*frame,gow3_frames.Inputs(),
+        gow3_pair && gow3_pair->GetStats().state==Gow3::Pair::State::Active);
     if (gow3_trace_enabled) {
         Gow3::Trace::WriteOrderedInterval(gow3_trace.Finish(flip, {
             .number=frame->number, .color=flip.address,

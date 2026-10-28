@@ -700,6 +700,11 @@ public:
 
     /// Ends current rendering scope.
     void EndRendering();
+    bool HasActiveRendering() const { return is_rendering; }
+    // Diagnostic observer only: the exact tick and actual queue submission result.
+    void SetDiagnosticSubmitCallback(Common::UniqueFunction<void, u64, vk::Result>&& callback) {
+        diagnostic_submit = std::move(callback);
+    }
 
     /// spartanport: SPARTAN_FULL_BARRIERS=1 records a full memory barrier around every render pass and
     /// every compute dispatch, to tell a missing barrier from everything else.
@@ -898,6 +903,7 @@ private:
     CommandPool command_pool;
     DynamicState dynamic_state;
     SubmitFunc on_submit{};
+    Common::UniqueFunction<void, u64, vk::Result> diagnostic_submit{};
     vk::CommandBuffer current_cmdbuf;
     std::condition_variable_any event_cv;
     struct PendingOp {

@@ -8,6 +8,8 @@ d'instrumentation expérimentale. **Le DLAA natif GoW3 n'est pas fonctionnel et
 le pilote autonome sans supervision n'est pas opérationnel.** Le chargement
 et une collecte sous pilotage visuel de l'agent sont désormais validés; voir
 [le protocole et les résultats réels](gow3-supervised-control.md).
+La capture de **pixels réels couleur/profondeur MSAA x2** est maintenant
+intégrée et exécutée sur Gaia : voir [les résultats et limites](gow3-real-pixels.md).
 
 ## Provenance et périmètre
 
@@ -37,7 +39,7 @@ build ni l'état actuel d'une instance du jeu.
 | Caméra | Reconnaissance ciblée du shader, snapshots du constant ring et contrôles de cohérence. `camera-candidate` signifie seulement deux échantillons cohérents; ce statut apparaît aussi dans le menu. |
 | Frontières de frame | Fermeture caméra au flip accepté et ordonné, plutôt qu'à chaque groupe de draws d'affichage; identité transmise jusqu'à la présentation. |
 | Constant ring | Correction du retrait des allocations lorsque le curseur cesse d'avancer, avec test de saturation et de retard GPU simulé. Cette correction s'applique aussi sans les diagnostics. |
-| Collecte | Traces bornées, captures de deux intervalles et provenance des images/vues/backings; compteurs de perte et résultats incomplets explicites. Pas de capture de pixels du jeu intégrée. |
+| Collecte | Traces bornées et extraction opt-in de deux intervalles de pixels réels couleur/profondeur MSAA x2, avec tick GPU et fermeture ordonnée. La provenance globale peut rester incomplète; voir le rapport de pixels. |
 | Projection/profondeur | Contrats CPU et bancs Vulkan hors écran, y compris profondeur multisample et durée de vie des copies. Les images synthétiques appartiennent au banc, pas au cache réel du jeu. |
 | Santé | Hook passif opt-in et journal borné; santé informative, aucune preuve de vie/mort ni décision de contrôle. |
 | Clavier | Trace passive de S et de l'axe vertical du stick gauche, désactivée par défaut; les tests caractérisent aussi les limites du replay existant. |
@@ -49,11 +51,11 @@ Les principaux diagnostics exigent des variables de processus explicites
 et, pour les collectes, des destinations et déclencheurs dédiés. Cette intégration
 ne les active pas dans les réglages persistants.
 
-## Vérification de l'intégration
+## Vérification initiale de l'intégration (historique)
 
 La compilation complète de `spartanport-probe` et des 29 cibles de validation
 réussit depuis un nouveau dossier de build, avec deux jobs et les dépendances
-déjà présentes. Le probe construit n'a pas été exécuté.
+déjà présentes. À cette étape initiale, le probe construit n'avait pas été exécuté.
 
 Le passage final du validateur réussit entièrement : **58 tests Python,
 48 exécutions de bancs CPU et deux bancs Vulkan hors écran**. Les huit étapes de
@@ -122,9 +124,9 @@ comme des passages réussis dans le bilan final.
 1. Valider sur une vraie scène les constantes, la permutation du shader, les
    conventions clip/viewport et la profondeur par échantillon correspondant au
    même producteur et à la même frame.
-2. Intégrer une capture bornée au cache réel avec propriété des ressources,
-   barrières, tick d'achèvement et reprise du rendu démontrés. Le banc hors écran
-   ne suffit pas à prouver cette intégration.
+2. La capture bornée au cache réel est désormais exécutée sur Gaia. Étendre sa
+   validation au-delà des deux intervalles capturés et résoudre les vues encore
+   non identifiées dans la provenance globale.
 3. Établir la couleur avant toute interface, les mouvements d'objets, les
    disocclusions, les coupures caméra et la gestion du jitter/historique.
 4. Implémenter et valider le dispatch NGX et la recomposition de l'interface.

@@ -1,5 +1,8 @@
 # Revue du runtime avant intégration de la capture
 
+État historique avant implémentation. Pour l'extraction désormais intégrée et
+les deux intervalles réels de Gaia, voir [le rapport de pixels](gow3-real-pixels.md).
+
 27 octobre 2026, checkout isolé, base `f58660558a03e74af057f9cdfa556e31346bbba9`.
 Revue de sources et tests CPU uniquement. Aucune copie GPU ajoutée au runtime,
 aucun jeu lancé, aucune sauvegarde consultée, aucun commit/push.
