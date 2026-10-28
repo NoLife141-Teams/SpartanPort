@@ -348,6 +348,12 @@ target_link_libraries(gow3-shader-layout PRIVATE Vulkan::Headers fmt::fmt Boost:
 add_executable(gow3-reprojection-contract-test EXCLUDE_FROM_ALL ../tests/test_gow3_reprojection_contract.cpp)
 target_compile_options(gow3-reprojection-contract-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(gow3-reprojection-contract-test PRIVATE ..)
+add_executable(gow3-calibrated-reprojection-test EXCLUDE_FROM_ALL ../tests/test_gow3_calibrated_reprojection.cpp)
+target_compile_options(gow3-calibrated-reprojection-test PRIVATE -UNDEBUG -Wall -Wextra -Werror -ffp-contract=off)
+target_include_directories(gow3-calibrated-reprojection-test PRIVATE ..)
+add_executable(gow3-reproject-points EXCLUDE_FROM_ALL tools/gow3_reproject_points.cpp)
+target_compile_options(gow3-reproject-points PRIVATE -Wall -Wextra -Werror -ffp-contract=off)
+target_include_directories(gow3-reproject-points PRIVATE shadps4)
 
 add_executable(gow3-depth-samples-test EXCLUDE_FROM_ALL ../tests/test_gow3_depth_samples.cpp)
 target_compile_options(gow3-depth-samples-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
@@ -618,6 +624,7 @@ target_compile_options(swapchain-focus-test PRIVATE -UNDEBUG -Wall -Wextra -Werr
 # tools/validate_gow3_diagnostics.py runs them in separate synthetic directories.
 add_custom_target(gow3-diagnostics-tests DEPENDS
     gow3-camera-inputs-test gow3-pair-capture-test gow3-group-capture-test
+    gow3-calibrated-reprojection-test gow3-reproject-points
     gow3-capture-bytes-test gow3-shader-layout gow3-reprojection-contract-test
     gow3-depth-samples-test gow3-clip-pipeline-test gow3-vertex-contract-test
     gow3-vulkan-depth-test gow3-vulkan-readback-test gow3-readback-primitives-test

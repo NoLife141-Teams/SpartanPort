@@ -1,5 +1,8 @@
 """Compare camera reprojection hypotheses on captured pixels; exploratory, not motion truth.
 
+Historical global metric. Use validate_gow3_pixel_reprojection.py for independent
+image correspondences and separate foreground/background candidate cohorts.
+
 Uses approximate pixel centers (sample positions were not measured), nearest
 neighbor matching, and a fixed smooth-depth mask. Moving objects remain present.
 """

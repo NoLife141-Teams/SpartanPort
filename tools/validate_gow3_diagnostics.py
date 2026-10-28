@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CPU_TARGETS = [
     'gow3-camera-inputs-test', 'gow3-pair-capture-test', 'gow3-group-capture-test',
     'gow3-capture-bytes-test', 'gow3-reprojection-contract-test',
+    'gow3-calibrated-reprojection-test',
     'gow3-depth-samples-test', 'gow3-clip-pipeline-test', 'gow3-vertex-contract-test',
     'gow3-readback-primitives-test', 'gow3-resource-provenance-test',
     'gow3-provenance-budget-test', 'constant-ring-stamps-test',

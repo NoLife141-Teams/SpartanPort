@@ -84,6 +84,11 @@ extractions validées. Elle reste explicitement présente dans
 
 ## Diagnostic de reprojection
 
+Suite : le [contrat et le diagnostic corrigés](gow3-camera-reprojection-fix.md)
+séparent les correspondances du fond et du premier plan mobile, avec une
+seconde collecte indépendante. Les chiffres ci-dessous sont le premier test
+global, conservé pour comprendre sa limite.
+
 `reprojection-probe.json` compare des hypothèses sur une grille fixe et un
 masque de profondeur lisse. Centres de pixels approximatifs, échantillonnage
 au plus proche, objets mobiles présents; positions MSAA non mesurées.

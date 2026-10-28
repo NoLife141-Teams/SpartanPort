@@ -10,6 +10,9 @@ et une collecte sous pilotage visuel de l'agent sont désormais validés; voir
 [le protocole et les résultats réels](gow3-supervised-control.md).
 La capture de **pixels réels couleur/profondeur MSAA x2** est maintenant
 intégrée et exécutée sur Gaia : voir [les résultats et limites](gow3-real-pixels.md).
+Le [contrat de reprojection corrigé](gow3-camera-reprojection-fix.md) est
+cohérent avec le fond de deux paires réelles. Le mouvement propre du premier
+plan et le raccordement GPU GoW3 restent bloquants pour le DLAA.
 
 ## Provenance et périmètre
 
