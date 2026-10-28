@@ -5,12 +5,19 @@ layout(local_size_x=8,local_size_y=8) in;
 layout(binding=0) uniform texture2DMS depth_image;
 layout(binding=1) uniform texture2DMS color_image;
 layout(binding=2,std430) writeonly buffer Output { uint words[]; } output_data;
+#ifdef MOTION
+layout(binding=3) uniform texture2DMS motion_image;
+#endif
 layout(push_constant) uniform Size { uint width; uint height; } size;
 void main() {
     uvec2 p=gl_GlobalInvocationID.xy;
     if(p.x>=size.width || p.y>=size.height) return;
     for(uint sample_index=0;sample_index<2;++sample_index) {
-        uint base=((p.y*size.width+p.x)*2+sample_index)*5;
+        uint stride=5;
+#ifdef MOTION
+        stride=8;
+#endif
+        uint base=((p.y*size.width+p.x)*2+sample_index)*stride;
         vec4 color=texelFetch(color_image,ivec2(p),int(sample_index));
         float depth=texelFetch(depth_image,ivec2(p),int(sample_index)).r;
         output_data.words[base+0]=floatBitsToUint(color.r);
@@ -18,5 +25,13 @@ void main() {
         output_data.words[base+2]=floatBitsToUint(color.b);
         output_data.words[base+3]=floatBitsToUint(color.a);
         output_data.words[base+4]=floatBitsToUint(depth);
+#ifdef MOTION
+        vec4 motion=texelFetch(motion_image,ivec2(p),int(sample_index));
+        output_data.words[base+5]=floatBitsToUint(motion.x);
+        output_data.words[base+6]=floatBitsToUint(motion.y);
+        // Preserve the exact positive depth bits; sign bit alone marks invalid
+        // history (including negative zero). This keeps the SSBO below 128 MiB.
+        output_data.words[base+7]=floatBitsToUint(motion.w) | (motion.z>.999?0u:0x80000000u);
+#endif
     }
 }

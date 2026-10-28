@@ -29,6 +29,7 @@
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_depth_stencil_state.h"
 #include "video_core/renderer_vulkan/motion_history.h"
+#include "video_core/renderer_vulkan/gow3_motion.h"
 #include "video_core/renderer_vulkan/vk_draw_prep.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_lighting_test.h"
@@ -231,6 +232,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
                 : 1;
         info.hw.fs.z_export_format = regs.z_export_format;
         info.hw.fs.motion_vectors = sel.motion;
+        if(sel.motion && Gow3::MotionDiagnostic()) info.hw.fs.num_samples=2;
         u8 stencil_ref_export_enable = regs.depth_shader_control.stencil_op_val_export_enable |
                                        regs.depth_shader_control.stencil_test_val_export_enable;
         info.hw.fs.mrtz_mask = regs.depth_shader_control.z_export_enable |
@@ -880,10 +882,13 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         for (s32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS && !skip_cb_binding; ++cb) {
             bound += (regs.color_buffers[cb] && regs.color_target_mask.GetMask(cb)) ? 1 : 0;
         }
-        motion_possible = Shader::MotionVectors::positions_address != 0 && bound >= 5 &&
+        const bool gow3_motion=Gow3::MotionDiagnostic() && bound==0 &&
+            regs.depth_buffer.z_info.format==AmdGpu::DepthBuffer::ZFormat::Z32Float &&
+            regs.depth_buffer.NumSamples()==2 && regs.depth_control.depth_enable && regs.depth_control.depth_write_enable;
+        motion_possible = Shader::MotionVectors::positions_address != 0 && (Gow3::MotionDiagnostic()?gow3_motion:bound>=5) &&
                           !regs.color_buffers[Shader::MotionVectors::Output] &&
                           regs.depth_buffer.DepthValid() &&
-                          regs.depth_buffer.NumSamples() == 1 && !regs.IsClipDisabled() &&
+                          (regs.depth_buffer.NumSamples() == 1 || gow3_motion) && !regs.IsClipDisabled() &&
                           regs.stage_enable.raw == AmdGpu::ShaderStageEnable::VgtStages::Vs;
     }
     sel.motion = false;
@@ -912,7 +917,16 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     }
     if (motion_possible) {
         const auto* vs = sel.infos[static_cast<u32>(Shader::SwStage::Vertex)];
-        if (vs) {
+        if(Gow3::MotionDiagnostic() && vs) {
+            // Exact observed depth producers; unknown shaders remain uninstrumented.
+            switch(vs->pgm_hash) {
+            case 0xaed40011eb5259f3ull: case 0xe05348402abf2a24ull:
+            case 0xccdebd802401e5acull: case 0x36a1637dcb4c9453ull:
+            case 0x71f89d932abf2a24ull: sel.motion=true; break;
+            default: break;
+            }
+        }
+        if (vs && !Gow3::MotionDiagnostic()) {
             // Shaders with a bone palette (motion_history.h). Small skeletons (weapons,
             // props) also include static world pieces: the rasterizer gives those
             // history only while their constants change.
@@ -1002,7 +1016,10 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         color_buffer.swizzle = AmdGpu::IdentityMapping;
         key.write_masks[mv] = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                               vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
-        key.color_samples[mv] = 1;
+        key.color_samples[mv] = Gow3::MotionDiagnostic()?key.depth_samples:1;
+        // All diagnostic attachment slots use the same sample count, including
+        // undefined/null slots; no mixed-sample path is needed for this depth pass.
+        if(Gow3::MotionDiagnostic()) key.color_samples.fill(key.depth_samples);
     }
 
     // Force all color samples to match depth samples to avoid unsupported MSAA configuration

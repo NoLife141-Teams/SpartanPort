@@ -3,6 +3,8 @@
 #include "vk_scheduler.h"
 #include "video_core/texture_cache/texture_cache.h"
 #include "video_core/host_shaders/gow3_pixel_extract_comp.h"
+#include "video_core/host_shaders/gow3_pixel_motion_extract_comp.h"
+#include "gow3_motion.h"
 #include "gow3_pixel_capture.h"
 #include <iomanip>
 #include <sstream>
@@ -18,14 +20,17 @@ Capture::Capture(const Instance& instance,const char* path):directory(path?path:
     const VkPhysicalDeviceMemoryProperties memory=physical.getMemoryProperties();
     extractor=std::make_unique<Extractor>(VkDevice(instance.GetDevice()),
         VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr,memory,
-        physical.getProperties().limits.maxStorageBufferRange,GOW3_PIXEL_EXTRACT_COMP);
-    std::fputs("{\"kind\":\"start\",\"schema\":\"gow3-real-pixels-v1\",\"max_frames\":2,\"memory_budget\":268435456,\"file_budget\":201326592,\"pre_hud_proven\":false,\"sample_positions_measured\":false,\"format\":\"little-endian float32 pixel-major sample-major RGBA-linear depth; 2 samples; 5 floats per sample\"}\n",events);
+        physical.getProperties().limits.maxStorageBufferRange,
+        Gow3::MotionDiagnostic()?std::span<const uint32_t>(GOW3_PIXEL_MOTION_EXTRACT_COMP):std::span<const uint32_t>(GOW3_PIXEL_EXTRACT_COMP),Gow3::MotionDiagnostic()?8:5);
+    std::fprintf(events,"{\"kind\":\"start\",\"schema\":\"gow3-real-pixels-v1\",\"max_frames\":2,\"memory_budget\":%llu,\"file_budget\":%llu,\"words_per_sample\":%u,\"pre_hud_proven\":false,\"sample_positions_measured\":false,\"format\":\"little-endian float32 pixel-major sample-major RGBA-linear depth, optional motion dx dy signed-depth-validity; 2 samples\"}\n",
+        Gow3::MotionDiagnostic()?268435456ull:268435456ull,Gow3::MotionDiagnostic()?268435456ull:201326592ull,Gow3::MotionDiagnostic()?8:5);
     std::fflush(events);
 }
-void Capture::Boundary(const CameraFrame& frame,const CameraInputs& camera,bool pair_active) {
+void Capture::Boundary(const CameraFrame& frame,const CameraInputs& camera,bool pair_active,Motion::History::Stats stats) {
     std::scoped_lock lock{mutex};
     for(auto& job:jobs) if(job.interval==frame.number+1) {
         job.closed=true; job.frame=frame; job.camera=camera.current;
+        job.motion_stats=stats;
         if(!job.attempted) job.error="no-target-draw";
         if(frame.status!=Status::Candidate || frame.unsnapshotted || !frame.samples)
             job.error="camera-interval-invalid";
@@ -48,7 +53,7 @@ void Capture::Submit(uint64_t tick,vk::Result result) {
 }
 void Capture::Record(const Pair::Draw& draw,const Provenance::Identity& depth,
     vk::ImageLayout depth_layout,const Provenance::Identity& color,vk::ImageLayout color_layout,
-    Scheduler& scheduler,VideoCore::TextureCache& cache,bool allowed) {
+    Scheduler& scheduler,VideoCore::TextureCache& cache,bool allowed,Source motion) {
     Job* selected=nullptr;
     {
         std::scoped_lock lock{mutex};
@@ -56,15 +61,16 @@ void Capture::Record(const Pair::Draw& draw,const Provenance::Identity& depth,
         if(!selected) return;
         auto& job=*selected; job.attempted=true; job.draw=draw.serial; job.depth=depth; job.color=color;
         if(!allowed || scheduler.HasActiveRendering()) { job.error="active-rendering-or-proxy"; return; }
+        if(Gow3::MotionDiagnostic() && !motion.view) { job.error="motion-image-unavailable"; return; }
         job.tick=scheduler.CurrentTick();
         try {
             job.error=cache.WithPixelSources(depth,depth_layout,color,color_layout,job.sampled_components,
                 [&](vk::ImageView d,vk::ImageView c,u32 w,u32 h) {
                     job.output=extractor->Allocate(w,h);
                     auto* output=job.output.get(); auto* extract=extractor.get();
-                    scheduler.Record([extract,output,d,c,depth_layout,color_layout](vk::CommandBuffer cmd) {
+                    scheduler.Record([extract,output,d,c,depth_layout,color_layout,motion](vk::CommandBuffer cmd) {
                         extract->Record(VkCommandBuffer(cmd),*output,
-                            {VkImageView(d),VkImageLayout(depth_layout)},{VkImageView(c),VkImageLayout(color_layout)});
+                            {VkImageView(d),VkImageLayout(depth_layout)},{VkImageView(c),VkImageLayout(color_layout)},motion);
                     });
                 });
         } catch(const std::exception& error) {
@@ -110,6 +116,9 @@ void Capture::Publish(Job& job) {
          <<",\"address\":"<<id.address<<",\"format\":"<<id.format<<",\"samples\":"<<id.samples<<'}';
     };
     identity("depth",job.depth); identity("color",job.color);
+    o<<",\"words_per_sample\":"<<(Gow3::MotionDiagnostic()?8:5)<<",\"motion_draws\":"<<job.motion_stats.draws
+     <<",\"motion_loaded\":"<<job.motion_stats.loaded<<",\"motion_unmatched\":"<<job.motion_stats.unmatched
+     <<",\"motion_exhausted\":"<<job.motion_stats.exhausted<<",\"motion_ambiguous\":"<<job.motion_stats.ambiguous;
     o<<",\"sampled_components_vk_enum_depth_then_color\":[";
     for(size_t i=0;i<job.sampled_components.size();++i) o<<(i?",":"")<<job.sampled_components[i];
     o<<"],\"color_semantics\":\"actual sampled view, sRGB decoded, component mapping applied; not stored RGBA bytes\"";

@@ -181,7 +181,10 @@ void Capture::FlushDraw() {
       << ",\"depth_clear_bits\":" << d.depth_clear_bits << ",\"depth_test\":" << d.depth_test
       << ",\"depth_write\":" << d.depth_write << ",\"depth_compare\":" << d.depth_compare
       << ",\"requested_depth_clear\":" << d.depth_clear << ",\"legacy_ui_hint\":" << d.legacy_ui_hint
-      << ",\"proxy_path\":" << d.proxy_path << ",\"render_extent\":[" << d.width << ',' << d.height << ']';
+      << ",\"proxy_path\":" << d.proxy_path << ",\"diagnostic_motion_attachment_excluded\":" << d.diagnostic_motion_attachment_excluded
+      << ",\"motion_geometry_key\":" << d.motion_geometry_key << ",\"motion_object_buffer\":" << d.motion_object_buffer
+      << ",\"motion_flags\":" << d.motion_flags << ",\"motion_index_snapshot\":" << d.motion_index_snapshot
+      << ",\"render_extent\":[" << d.width << ',' << d.height << ']';
     const auto reasons=FormatSnapshotCounts(d.snapshot_reasons);
     o << ",\"camera_observed\":" << d.camera_observed << ",\"snapshot_present\":" << d.snapshot_present
       << ",\"snapshot_observations\":" << d.snapshot_observations << ",\"snapshot_missing\":" << d.snapshot_missing

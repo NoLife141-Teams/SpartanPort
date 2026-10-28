@@ -26,7 +26,9 @@ def hashes(directory):
     return result
 
 
-def prepare(seed, game, probe, pixels=False):
+def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False):
+    if motion and not pixels:
+        raise ValueError('--motion requires --pixels')
     seed, game, probe = seed.resolve(), game.resolve(), probe.resolve()
     if not (game / 'eboot.bin').is_file() or not probe.is_file():
         raise ValueError('Game eboot.bin or validated probe is missing')
@@ -93,12 +95,28 @@ def prepare(seed, game, probe, pixels=False):
     if pixels:
         (session / 'pixels').mkdir()
         variables.update(SPARTAN_GOW3_PIXELS='1', SPARTAN_GOW3_PIXEL_DIR=str(session / 'pixels'))
+    if motion:
+        variables['SPARTAN_GOW3_MOTION']='1'
+    dlss_files={}
+    if dlaa:
+        libraries={
+            'spartanport_dlss.dll': ROOT/'out/verification/dlss-bridge/Release/spartanport_dlss.dll',
+            'nvngx_dlss.dll': ROOT/'out/dependencies/nvidia-dlss/lib/Windows_x86_64/rel/nvngx_dlss.dll',
+        }
+        for name,source in libraries.items():
+            shutil.copy2(source,session/'bin'/name)
+            dlss_files[name]=hashlib.sha256((session/'bin'/name).read_bytes()).hexdigest()
+        (session/'dlaa.switch').write_text('off\n',encoding='ascii')
+        (session/'dlss-capture').mkdir()
+        variables.update(SPARTAN_DLSS='1',SPARTAN_GOW3_DLAA='1',
+                         SPARTAN_GOW3_DLAA_SWITCH=str(session/'dlaa.switch'),
+                         SPARTAN_GOW3_DLAA_DUMP=str(session/'dlss-capture'))
     manifest = dict(schema='gow3-supervised-session-v1', session=str(session),
                     prepared_utc=datetime.now(timezone.utc).isoformat(),
                     source_seed=str(seed), save_hashes=before, backup_verified=True,
                     source_probe=str(source_probe), probe=str(probe), probe_sha256=probe_hash,
                     environment=variables, cheats=dict(health=True),
-                    skip_intro_requested=True, save_load_confirmed=False)
+                    skip_intro_requested=True, save_load_confirmed=False,dlss_files=dlss_files)
     (session / 'session.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     return session, manifest
 
@@ -109,9 +127,12 @@ def main():
     parser.add_argument('--game-dir', type=Path, required=True)
     parser.add_argument('--probe', type=Path, default=ROOT / 'out/verification/dot-build/spartanport-probe.exe')
     parser.add_argument('--launch', action='store_true')
+    parser.add_argument('--wait', action='store_true', help='Keep the launcher alive until the isolated game exits')
     parser.add_argument('--pixels', action='store_true', help='Extract two real MSAA color/depth intervals with the first metadata trigger')
+    parser.add_argument('--motion', action='store_true', help='Opt-in GoW3 GPU vertex-history diagnostic; DLAA stays off')
+    parser.add_argument('--dlaa', action='store_true', help='Native GoW3 DLAA experiment; starts off, enable with session/dlaa.switch')
     args = parser.parse_args()
-    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, args.pixels)
+    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, args.pixels, args.motion,args.dlaa)
     if args.launch:
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(('SPARTAN_', 'GOW3_'))}
         env.update(manifest['environment'])
@@ -126,7 +147,9 @@ def main():
         manifest['launch_utc'] = datetime.now(timezone.utc).isoformat()
         (session / 'session.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     print(json.dumps(dict(session=str(session), runner_pid=manifest.get('runner_pid'),
-                         backup_files=len(manifest['save_hashes']), backup_verified=True)))
+                         backup_files=len(manifest['save_hashes']), backup_verified=True)),flush=True)
+    if args.launch and args.wait:
+        raise SystemExit(child.wait())
 
 
 if __name__ == '__main__':

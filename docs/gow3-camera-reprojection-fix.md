@@ -2,7 +2,9 @@
 
 27 octobre 2026, Toronto. Le fond lointain de deux paires réelles suit la
 caméra avec une erreur médiane inférieure à 0,21 pixel. Le premier plan de
-Gaia ne peut pas être reprojeté par la caméra seule. **Le DLAA reste désactivé.**
+Gaia ne peut pas être reprojeté par la caméra seule. Les captures de cette étude
+gardent le DLAA désactivé. La suite ajoute les vecteurs GPU et le
+[DLAA natif testé sur Gaia](gow3-native-dlaa.md).
 
 ## Problème identifié et correctif
 

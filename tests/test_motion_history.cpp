@@ -109,5 +109,17 @@ int main() {
     assert(JitterPhases(960, 1920) == 32);
     assert(JitterPhases(640, 1920) == 72);
     assert(JitterPhases(0, 1920) == 8);
-    std::puts("Motion history: PASS (ranges, restart, offsets, matching, capacity, gating, index cache, jitter)");
+    // Diagnostic mode never pairs duplicate draws by occurrence order. A
+    // duplicate invalidates the next frame's key even if the next frame is unique.
+    History strict(1024,true);
+    draw={.shader=1,.geometry=2,.indices=3,.topology=4,.index_count=3,.instances=1,.vertices={0,3}};
+    assert(strict.Prepare(draw).store);
+    assert(!strict.Prepare(draw).store && strict.stats.ambiguous==1);
+    strict.NextFrame();
+    assert(!strict.Prepare(draw).load && strict.stats.ambiguous==2);
+    strict.NextFrame();
+    assert(!strict.Prepare(draw).load); // rejected previous key did not seed history
+    strict.NextFrame();
+    assert(strict.Prepare(draw).load);
+    std::puts("Motion history: PASS (ranges, matching, capacity, gating, strict duplicate rejection, index cache, jitter)");
 }

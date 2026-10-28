@@ -15,6 +15,8 @@ struct Extractor::Impl {
     VkDevice device;
     VkPhysicalDeviceMemoryProperties memory;
     uint64_t range{},allocated{};
+    uint32_t words=5;
+    uint64_t budget=MemoryBudget;
     uint32_t slots{},inflight{};
 #define PIXEL_FUNCTIONS(X) \
     X(CreateBuffer) X(DestroyBuffer) X(GetBufferMemoryRequirements) X(AllocateMemory) X(FreeMemory) \
@@ -42,16 +44,18 @@ struct Extractor::Impl {
 };
 Extractor::Extractor(VkDevice device,PFN_vkGetDeviceProcAddr get,
                      const VkPhysicalDeviceMemoryProperties& memory,
-                     uint64_t max_storage_range,std::span<const uint32_t> spirv)
+                     uint64_t max_storage_range,std::span<const uint32_t> spirv,uint32_t words)
     :impl(std::make_unique<Impl>()) {
     auto& p=*impl;p.device=device;p.memory=memory;p.range=max_storage_range;
+    if(words!=5 && words!=8) throw std::runtime_error("Unsupported pixel record stride");
+    p.words=words; p.budget=MemoryBudget;
 #define LOAD(name) p.name=reinterpret_cast<PFN_vk##name>(get(device,"vk" #name)); if(!p.name) throw std::runtime_error("Missing vk" #name);
     PIXEL_FUNCTIONS(LOAD)
 #undef LOAD
     if(spirv.empty() || spirv.size_bytes()>1024*1024) throw std::runtime_error("Invalid pixel extraction shader");
-    std::array<VkDescriptorSetLayoutBinding,3> bindings{};
-    for(uint32_t i=0;i<3;++i) bindings[i]={i,i==2?VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr};
-    VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};dl.bindingCount=3;dl.pBindings=bindings.data();
+    std::array<VkDescriptorSetLayoutBinding,4> bindings{};
+    for(uint32_t i=0;i<4;++i) bindings[i]={i,i==2?VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr};
+    VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};dl.bindingCount=4;dl.pBindings=bindings.data();
     Check(p.CreateDescriptorSetLayout(device,&dl,nullptr,&p.descriptors),"pixel descriptors");
     VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT,0,8};
     VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pl.setLayoutCount=1;pl.pSetLayouts=&p.descriptors;pl.pushConstantRangeCount=1;pl.pPushConstantRanges=&push;
@@ -61,19 +65,19 @@ Extractor::Extractor(VkDevice device,PFN_vkGetDeviceProcAddr get,
     VkComputePipelineCreateInfo cp{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};cp.layout=p.layout;cp.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,nullptr,0,VK_SHADER_STAGE_COMPUTE_BIT,module,"main",nullptr};
     const auto result=p.CreateComputePipelines(device,VK_NULL_HANDLE,1,&cp,nullptr,&p.pipeline);
     p.DestroyShaderModule(device,module,nullptr);Check(result,"pixel pipeline");
-    const std::array<VkDescriptorPoolSize,2> sizes{{{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,4},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,2}}};
+    const std::array<VkDescriptorPoolSize,2> sizes{{{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,6},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,2}}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};pool.maxSets=2;pool.poolSizeCount=2;pool.pPoolSizes=sizes.data();
     Check(p.CreateDescriptorPool(device,&pool,nullptr,&p.pool),"pixel descriptor pool");
 }
 Extractor::~Extractor()=default;
 std::unique_ptr<Extractor::Output> Extractor::Allocate(uint32_t width,uint32_t height) {
-    auto& p=*impl;const auto bytes=ByteSize(width,height);
+    auto& p=*impl;const auto bytes=ByteSize(width,height)/5*p.words;
     if(!bytes || bytes>p.range || p.slots==2) throw std::runtime_error("Pixel dimensions/range/two-frame limit");
     auto out=std::unique_ptr<Output>(new Output(&p));out->width=width;out->height=height;out->bytes=bytes;
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};bi.size=bytes;bi.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;bi.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
     Check(p.CreateBuffer(p.device,&bi,nullptr,&out->buffer),"pixel output buffer");
     VkMemoryRequirements requirement{};p.GetBufferMemoryRequirements(p.device,out->buffer,&requirement);
-    if(requirement.size>MemoryBudget || p.allocated>MemoryBudget-requirement.size) throw std::runtime_error("Pixel allocation budget");
+    if(requirement.size>p.budget || p.allocated>p.budget-requirement.size) throw std::runtime_error("Pixel allocation budget");
     uint32_t selected=~0u;int score=-1;
     for(uint32_t i=0;i<p.memory.memoryTypeCount;++i) {
         const auto flags=p.memory.memoryTypes[i].propertyFlags;
@@ -97,13 +101,20 @@ Extractor::Output::~Output() {
     if(buffer) owner->DestroyBuffer(owner->device,buffer,nullptr);
     if(memory) {owner->FreeMemory(owner->device,memory,nullptr);owner->allocated-=allocation_bytes;}
 }
-void Extractor::Record(VkCommandBuffer command,Output& out,Source depth,Source color) {
+void Extractor::Record(VkCommandBuffer command,Output& out,Source depth,Source color,Source motion) {
     auto& p=*impl;
     if(out.recorded || !depth.view || !color.view) throw std::runtime_error("Pixel output reused or null source");
     const std::array<VkDescriptorImageInfo,2> images{{{VK_NULL_HANDLE,depth.view,depth.layout},{VK_NULL_HANDLE,color.view,color.layout}}};
     const VkDescriptorBufferInfo buffer{out.buffer,0,out.bytes};std::array<VkWriteDescriptorSet,3> writes{};
     for(uint32_t i=0;i<3;++i){auto& w=writes[i];w.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;w.dstSet=out.descriptor;w.dstBinding=i;w.descriptorCount=1;w.descriptorType=i==2?VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;if(i==2)w.pBufferInfo=&buffer;else w.pImageInfo=&images[i];}
     p.UpdateDescriptorSets(p.device,3,writes.data(),0,nullptr);
+    if(p.words==8) {
+        if(!motion.view) throw std::runtime_error("Missing diagnostic motion view");
+        const VkDescriptorImageInfo info{VK_NULL_HANDLE,motion.view,motion.layout};
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};w.dstSet=out.descriptor;w.dstBinding=3;
+        w.descriptorCount=1;w.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;w.pImageInfo=&info;
+        p.UpdateDescriptorSets(p.device,1,&w,0,nullptr);
+    }
     const VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER,nullptr,VK_ACCESS_MEMORY_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT};
     p.CmdPipelineBarrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&before,0,nullptr,0,nullptr);
     p.CmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,p.pipeline);

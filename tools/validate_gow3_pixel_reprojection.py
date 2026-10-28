@@ -76,9 +76,10 @@ def probe(session, cpp_helper):
     for frame in report['frames']:
         r = frame['runtime']
         path = session/'pixels'/r['file']
-        if path.stat().st_size != w*h*40 or file_hash(path) != frame['sha256']:
+        words=r.get('words_per_sample',5)
+        if words not in (5,8) or path.stat().st_size != w*h*2*words*4 or file_hash(path) != frame['sha256']:
             raise ValueError('Raw capture size/hash changed')
-        arrays.append(np.memmap(path, dtype='<f4', mode='r', shape=(h, w, 2, 5)))
+        arrays.append(np.memmap(path, dtype='<f4', mode='r', shape=(h, w, 2, words)))
     previous, current = arrays
     rows = [json.loads(line) for path in sorted((session/'logs').glob('group.*.jsonl')) for line in path.read_text().splitlines()]
     pv, cv = [camera_view(rows, r['interval']) for r in (a, b)]
@@ -146,10 +147,23 @@ def probe(session, cpp_helper):
         cohorts.append(dict(cohort=label, candidates=int(mask.sum()), hypotheses=statistics))
     for i, item in enumerate(matches):
         item['predictions'] = {name: dict(flow=c['flow'][i].tolist(), error_px=float(c['errors'][i]), valid=bool(c['valid'][i])) for name, c in cases.items()}
+    gpu_motion=None
+    if current.shape[-1]==8:
+        signed_depth=current[y,x,0,7]
+        gpu_valid=(~np.signbit(signed_depth)) & (np.abs(np.abs(signed_depth)-z)<=2e-7)
+        gpu_flow=current[y,x,0,5:7]
+        gpu_error=np.linalg.norm(gpu_flow-measured,axis=1)
+        gpu_motion=[]
+        for label,mask in [('all',np.ones(len(z),dtype=bool)),('near_below_0.99',z<.99),('far_0.995_to_0.9999',(z>=.995)&(z<.9999))]:
+            values=gpu_error[gpu_valid&mask]
+            gpu_motion.append(dict(cohort=label,candidates=int(mask.sum()),valid=int((gpu_valid&mask).sum()),
+                median_px=float(np.median(values)) if len(values) else None,p90_px=float(np.quantile(values,.9)) if len(values) else None))
+        for i,item in enumerate(matches):
+            item['gpu_motion']=dict(valid=bool(gpu_valid[i]),flow=gpu_flow[i].tolist(),error_px=float(gpu_error[i]))
     result = dict(schema='gow3-pixel-reprojection-correspondences-v2', intervals=[a['interval'], b['interval']],
                   raw_hashes=[f['sha256'] for f in report['frames']], matches=matches, cohorts=cohorts,
                   cpp_python_max_delta=max_delta, viewport_current=cv.values(), raw_clip='MinusWToW' if cv.minus_w else 'ZeroToW',
-                  selection_uses_predicted_flow=False, runtime_dlaa_enabled=False, full_scene_motion_validated=False,
+                  selection_uses_predicted_flow=False, runtime_dlaa_enabled=False, full_scene_motion_validated=False,gpu_motion=gpu_motion,
                   limitations='Far depth is a candidate static-world subset, not a producer/object-ID mask. Approximate centers, unknown MSAA positions, moving objects and incomplete provenance. Thresholds investigated on the first pair; independent capture required.')
     with (session/'reprojection-correspondences.json').open('x', encoding='utf-8') as stream:
         json.dump(result, stream, indent=2, allow_nan=False)
@@ -164,3 +178,5 @@ if __name__ == '__main__':
     for cohort in result['cohorts']:
         print(cohort['cohort'], json.dumps(cohort['hypotheses']))
     print('C++/Python maximum delta', result['cpp_python_max_delta'])
+    if result['gpu_motion'] is not None:
+        print('GPU motion',json.dumps(result['gpu_motion']))

@@ -141,9 +141,10 @@ GraphicsPipeline::GraphicsPipeline(
             .rasterizationSamples = LiverpoolToVK::NumSamples(
                 key.num_samples, instance.GetColorSampleCounts() & instance.GetDepthSampleCounts()),
             // spartanport: SPARTAN_LIGHTING_TEST=shading keeps sample shading off (vk_lighting_test.h).
-            .sampleShadingEnable = !LightingTest::Current().shading &&
+            .sampleShadingEnable = (key.motion_vectors && key.num_samples>1) || (!LightingTest::Current().shading &&
                                    (fs_info.addr_flags.persp_sample_ena ||
-                                    fs_info.addr_flags.linear_sample_ena),
+                                    fs_info.addr_flags.linear_sample_ena)),
+            .minSampleShading = key.motion_vectors && key.num_samples>1?1.f:0.f,
         };
     }
 

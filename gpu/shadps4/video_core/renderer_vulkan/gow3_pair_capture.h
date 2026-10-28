@@ -75,6 +75,10 @@ struct Draw {
     std::array<ImageDescriptor,64> image_descriptors{};
     uint32_t image_descriptor_count{},image_descriptors_dropped{};
     bool grouped_details{};
+    bool diagnostic_motion_attachment_excluded{};
+    uint64_t motion_geometry_key{},motion_object_buffer{};
+    uint32_t motion_flags{};
+    bool motion_index_snapshot{};
     bool provenance_details{};
     uint32_t provenance_bindings_lost{};
     std::array<Provenance::Identity,8> color_provenance{};

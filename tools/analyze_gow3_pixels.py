@@ -17,10 +17,15 @@ def analyze(session):
     journal = [json.loads(line) for line in (directory / 'pixels.jsonl').read_text().splitlines()]
     if not journal or journal[0].get('schema') != 'gow3-real-pixels-v1':
         raise ValueError('Missing real-pixel schema marker')
-    results = [r for r in journal if r['kind'] == 'result']
+    # A rejected closure can publish before the prior interval's GPU readback.
+    # Join by interval identity, never by callback/file order.
+    results = sorted((r for r in journal if r['kind'] == 'result'), key=lambda r:r['interval'])
     if len(results) != 2:
         raise ValueError('Expected exactly two closed pixel results')
-    if results[1]['interval'] != results[0]['interval'] + 1 or sum(r['bytes'] for r in results) > 192*1024*1024:
+    words=journal[0].get('words_per_sample',5)
+    if words not in (5,8):
+        raise ValueError('Unsupported sample stride')
+    if results[1]['interval'] != results[0]['interval'] + 1 or sum(r['bytes'] for r in results) > (256 if words==8 else 192)*1024*1024:
         raise ValueError('Interval sequence or file budget invalid')
     rows = []
     for path in sorted((session / 'logs').glob('group.*.jsonl')):
@@ -73,10 +78,10 @@ def analyze(session):
         path = directory / result['file']
         if result['complete'] and path.is_file():
             w, h = result['width'], result['height']
-            expected = w * h * 2 * 5 * 4
+            expected = w * h * 2 * words * 4
             if not (0 < w <= 1920 and 0 < h <= 1080 and path.stat().st_size == expected == result['bytes']):
                 raise ValueError('Pixel dimensions/size mismatch')
-            pixels = np.memmap(path, dtype='<f4', mode='r', shape=(h, w, 2, 5))
+            pixels = np.memmap(path, dtype='<f4', mode='r', shape=(h, w, 2, words))
             color, depth = pixels[..., :4], pixels[..., 4]
             finite = bool(np.isfinite(pixels).all())
             if not finite:
@@ -93,6 +98,13 @@ def analyze(session):
                          depth_distinct_sample_pixels=int(np.count_nonzero(depth[:, :, 0] != depth[:, :, 1])),
                          color_distinct_sample_pixels=int(np.count_nonzero(np.any(color[:, :, 0] != color[:, :, 1], axis=-1))),
                          rgba_min=color.min(axis=(0, 1, 2)).tolist(), rgba_max=color.max(axis=(0, 1, 2)).tolist())
+            if words==8:
+                valid=~np.signbit(pixels[...,7])
+                same_depth=np.abs(np.abs(pixels[...,7])-depth)<=2e-7
+                frame['motion']=dict(valid_samples=int(valid.sum()),depth_consistent_samples=int((valid&same_depth).sum()),
+                    max_abs_vector=float(np.max(np.abs(pixels[...,5:7]))),ambiguous_draws=result.get('motion_ambiguous'),
+                    encoding='dx dy, absolute signed-depth is stored producer depth; sign bit marks invalid history, including negative zero')
+                frame['words_per_sample']=8
             rgb = np.clip(color[:, :, 0, :3], 0, 1)
             encoded = np.where(rgb <= .0031308, 12.92 * rgb, 1.055 * rgb ** (1 / 2.4) - .055)
             image = Image.fromarray(np.rint(encoded * 255).astype('uint8'))

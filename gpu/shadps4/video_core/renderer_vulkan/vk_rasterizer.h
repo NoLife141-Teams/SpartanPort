@@ -16,6 +16,7 @@
 #include "video_core/renderer_vulkan/vk_constant_ring.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/renderer_vulkan/vk_object_motion.h"
+#include "video_core/renderer_vulkan/vk_gow3_dlaa.h"
 #include "video_core/renderer_vulkan/vk_draw_pipe.h"
 #include "video_core/renderer_vulkan/vk_draw_prep.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
@@ -342,6 +343,9 @@ private:
     std::unique_ptr<SceneTargets> scene_targets;
     bool scene_started = false;
     std::unique_ptr<ObjectMotion> object_motion;
+    std::unique_ptr<Gow3Dlaa> gow3_dlaa;
+    std::array<Gow3::Provenance::Identity,Gow3::Provenance::Bindings::Capacity> gow3_dlaa_bindings{};
+    void ProcessGow3Dlaa(const GraphicsPipeline* pipeline);
     bool motion_draw = false;
     u64 motion_geometry{};    ///< vertex-stream identity of the current direct draw
     bool gbuffer_draw = false;
@@ -470,7 +474,11 @@ private:
         vk::Buffer handle;
         u64 offset;
         vk::IndexType type;
+        Motion::VertexRange motion_range{};
+        u64 motion_topology{};
+        bool motion_snapshot{};
     } index_bind{};
+    std::vector<u8> gow3_index_snapshot;
     /// The direct draw whose vertex/index buffers BindResources may resolve early.
     struct DrawInputs {
         const GraphicsPipeline* pipeline;

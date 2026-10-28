@@ -53,12 +53,15 @@ ObjectMotion::ObjectMotion(const Instance& instance_, Scheduler& scheduler_)
     : instance{instance_}, scheduler{scheduler_} {
     // Pipeline selection limits the extra attachment and vertex stores to likely
     // animated draws. A setting or environment override can still disable the path.
-    if (!SpartanSettings::Get().object_motion ||
-        SpartanSettings::Get().upscaler == SpartanSettings::UpscalerOff) {
+    if (!Gow3::MotionDiagnostic() && (!SpartanSettings::Get().object_motion ||
+        SpartanSettings::Get().upscaler == SpartanSettings::UpscalerOff)) {
         std::puts("Object motion: off (enable in menu or SPARTAN_OBJECT_MOTION=1)");
         return;
     }
     const auto& features = instance.GetPhysicalDevice().getFeatures();
+    if(Gow3::MotionDiagnostic() && (!features.sampleRateShading || instance.GetPhysicalDevice().getProperties().limits.maxColorAttachments<8)) {
+        std::puts("GoW3 motion: missing sample shading or eight attachments; disabled"); return;
+    }
     if (!features.vertexPipelineStoresAndAtomics) {
         std::printf("Object motion: vertexPipelineStoresAndAtomics unsupported, off\n");
         return;
@@ -67,7 +70,7 @@ ObjectMotion::ObjectMotion(const Instance& instance_, Scheduler& scheduler_)
     u64 params_address = 0, positions_address = 0;
     if (!CreateBuffer(instance, vk::DeviceSize(1 + FrameSlots * ParamsPerFrame) * 32, true,
                       params_buffer, params_allocation, &mapped, params_address) ||
-        !CreateBuffer(instance, vk::DeviceSize(1 + 2 * PositionsPerFrame) * 16, false,
+        !CreateBuffer(instance, vk::DeviceSize(1 + 2 * capacity) * 16, false,
                       positions_buffer, positions_allocation, nullptr, positions_address)) {
         std::printf("Object motion: buffer creation failed, off\n");
         return;
@@ -77,7 +80,7 @@ ObjectMotion::ObjectMotion(const Instance& instance_, Scheduler& scheduler_)
     Shader::MotionVectors::params_address = params_address;
     Shader::MotionVectors::positions_address = positions_address;
     enabled = true;
-    std::printf("Object motion: on (%u vertices per frame)\n", PositionsPerFrame);
+    std::printf("Object motion: on (%u vertices per frame)\n", capacity);
 }
 
 ObjectMotion::~ObjectMotion() {
@@ -95,6 +98,7 @@ void ObjectMotion::OnFrameStart() {
     if (!enabled) {
         return;
     }
+    if(Gow3::MotionDiagnostic()) history.stats={};
     if (SpartanStats::enabled && (frame % 600) == 0 && history.stats.draws) {
         const auto& s = history.stats;
         std::printf("Object motion: %llu draws, %llu stored, %llu with history, %llu unmatched, "
@@ -123,6 +127,7 @@ void ObjectMotion::OnFrameStart() {
     }
     params_used = 0;
     written = false;
+    diagnostic_depth=0; diagnostic_depth_conflict=false;
     scheduler.EndRendering();
     // Last frame's stores must be visible to this frame's loads. Also finish old reads
     // before the ping-pong half they reference is reused for writes.
@@ -179,7 +184,7 @@ void ObjectMotion::EnsureImage(u32 width, u32 height) {
         .extent = {width, height, 1},
         .mipLevels = 1,
         .arrayLayers = 1,
-        .samples = vk::SampleCountFlagBits::e1,
+        .samples = Gow3::MotionDiagnostic()?vk::SampleCountFlagBits::e2:vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
                  vk::ImageUsageFlagBits::eTransferSrc,
@@ -196,9 +201,14 @@ void ObjectMotion::EnsureImage(u32 width, u32 height) {
     written = false;
 }
 
-void ObjectMotion::Attach(RenderState& state, u32 width, u32 height) {
+void ObjectMotion::Attach(RenderState& state, u32 width, u32 height,u64 depth_uid) {
     constexpr u32 slot = Shader::MotionVectors::Output;
     EnsureImage(width, height);
+    if(Gow3::MotionDiagnostic()) {
+        if(diagnostic_depth && diagnostic_depth!=depth_uid) diagnostic_depth_conflict=true;
+        diagnostic_depth=depth_uid;
+        if(state.depth_stencil_attachment.depth_clear) written=false;
+    }
     auto& attachment = state.color_attachments[slot];
     attachment = {};
     attachment.image_view = *view;
@@ -227,6 +237,21 @@ void ObjectMotion::Attach(RenderState& state, u32 width, u32 height) {
         written = true;
     }
     state.num_color_attachments = std::max<u16>(state.num_color_attachments, slot + 1);
+}
+
+vk::ImageView ObjectMotion::RecordDiagnosticRead(u32 width,u32 height,u64 depth_uid) {
+    if(!Gow3::MotionDiagnostic()||!written||width!=image_width||height!=image_height||
+       !depth_uid||depth_uid!=diagnostic_depth||diagnostic_depth_conflict) return {};
+    const vk::ImageMemoryBarrier2 barrier{
+        .srcStageMask=vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask=vk::AccessFlagBits2::eMemoryRead|vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask=vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask=vk::AccessFlagBits2::eShaderRead,
+        .oldLayout=image_layout,.newLayout=vk::ImageLayout::eGeneral,
+        .image=vk::Image(image),.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1}};
+    scheduler.Record([barrier](vk::CommandBuffer cmd){cmd.pipelineBarrier2({.imageMemoryBarrierCount=1,.pImageMemoryBarriers=&barrier});});
+    image_layout=vk::ImageLayout::eGeneral;
+    return *view;
 }
 
 vk::ImageView ObjectMotion::PrepareRead(vk::CommandBuffer cmdbuf, u32 width, u32 height,

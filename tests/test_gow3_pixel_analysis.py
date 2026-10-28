@@ -44,7 +44,7 @@ class PixelAnalysisTests(unittest.TestCase):
         (self.root / 'logs/group.stationary.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
 
     def run_analysis(self):
-        rows = [dict(kind='start', schema='gow3-real-pixels-v1')] + self.results
+        rows = [dict(kind='start', schema='gow3-real-pixels-v1',words_per_sample=self.results[0].get('words_per_sample',5))] + self.results
         (self.root / 'pixels/pixels.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
         return analyze(self.root)
 
@@ -58,6 +58,13 @@ class PixelAnalysisTests(unittest.TestCase):
     def test_forged_flip_rejected(self):
         self.results[0]['closing_flip'] += 1
         self.assertIn('closure_token_mismatch', self.run_analysis()['frames'][0]['errors'])
+
+    def test_out_of_order_gpu_completion(self):
+        expected=sorted(r['interval'] for r in self.results)
+        self.results.reverse()
+        report=self.run_analysis()
+        self.assertTrue(report['valid'])
+        self.assertEqual([f['runtime']['interval'] for f in report['frames']],expected)
 
     def test_recycled_resource_label_rejected(self):
         self.results[0]['depth']['uid'] += 1
@@ -81,6 +88,22 @@ class PixelAnalysisTests(unittest.TestCase):
         # Nonfinite values must fail explicitly, never become a valid report.
         with self.assertRaises(ValueError):
             self.run_analysis()
+
+    def test_motion_validity_and_negative_zero(self):
+        for result in self.results:
+            path=self.root/'pixels'/result['file']
+            pixels=np.fromfile(path,dtype='<f4').reshape(2,2,2,5)
+            motion=np.zeros((2,2,2,3),dtype='<f4')
+            motion[...,0]=1.25
+            motion[...,1]=-2.5
+            motion[:,:,0,2]=.25
+            motion[:,:,1,2]=np.copysign(np.float32(0),np.float32(-1))
+            np.concatenate((pixels,motion),axis=-1).tofile(path)
+            result.update(words_per_sample=8,bytes=256,motion_ambiguous=0)
+        report=self.run_analysis()
+        self.assertTrue(report['valid'])
+        self.assertEqual(report['frames'][0]['motion']['valid_samples'],4)
+        self.assertEqual(report['frames'][0]['motion']['depth_consistent_samples'],4)
 
 
 if __name__ == '__main__':

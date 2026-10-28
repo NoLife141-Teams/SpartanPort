@@ -747,6 +747,10 @@ void EmitContext::DefineOutputs() {
             motion_frag_out = DefineOutput(F32[4], MotionVectors::Output);
             motion_in_cur = DefineInput(F32[4], MotionVectors::CurrentLocation);
             motion_in_prev = DefineInput(F32[4], MotionVectors::PreviousLocation);
+            if(runtime_info.hw.fs.num_samples>1) {
+                Decorate(motion_in_cur,spv::Decoration::Sample);
+                Decorate(motion_in_prev,spv::Decoration::Sample);
+            }
             Name(motion_frag_out, "motion_vector");
         }
         // Dual source blending allows at most 2 render targets, one for each source.

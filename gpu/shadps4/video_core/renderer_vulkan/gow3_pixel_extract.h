@@ -25,13 +25,13 @@ public:
     struct Output;
     Extractor(VkDevice device,PFN_vkGetDeviceProcAddr get,
               const VkPhysicalDeviceMemoryProperties& memory,
-              uint64_t max_storage_range,std::span<const uint32_t> spirv);
+              uint64_t max_storage_range,std::span<const uint32_t> spirv,uint32_t words=5);
     ~Extractor();
     Extractor(const Extractor&)=delete;
     std::unique_ptr<Output> Allocate(uint32_t width,uint32_t height);
     // Must be outside rendering. Full read-before/read-after dependencies leave
     // source layouts and the runtime image tracker unchanged. No resolve/copy.
-    void Record(VkCommandBuffer command,Output& out,Source depth,Source color);
+    void Record(VkCommandBuffer command,Output& out,Source depth,Source color,Source motion={});
     std::span<const std::byte> ReadCompleted(Output& out);
     void MarkCompleted(Output& out);
     uint64_t Allocated() const;

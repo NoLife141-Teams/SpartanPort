@@ -4,15 +4,19 @@ Revue du 27 octobre 2026, heure de Toronto.
 
 Le travail de Dot est rapatrié dans ce dépôt sur la branche
 `codex/integrate-dot-gow3-diagnostics`. Il constitue une base de recherche et
-d'instrumentation expérimentale. **Le DLAA natif GoW3 n'est pas fonctionnel et
-le pilote autonome sans supervision n'est pas opérationnel.** Le chargement
+d'instrumentation expérimentale. **Le DLAA natif GoW3 est maintenant raccordé
+à NGX et testé sur Gaia en 1080p**, sous flag explicite : voir
+[l'essai DLAA et son mode d'emploi](gow3-native-dlaa.md).
+Le pilote autonome sans supervision reste distinct du pilotage visuel utilisé ici. Le chargement
 et une collecte sous pilotage visuel de l'agent sont désormais validés; voir
 [le protocole et les résultats réels](gow3-supervised-control.md).
 La capture de **pixels réels couleur/profondeur MSAA x2** est maintenant
 intégrée et exécutée sur Gaia : voir [les résultats et limites](gow3-real-pixels.md).
 Le [contrat de reprojection corrigé](gow3-camera-reprojection-fix.md) est
 cohérent avec le fond de deux paires réelles. Le mouvement propre du premier
-plan et le raccordement GPU GoW3 restent bloquants pour le DLAA.
+plan est désormais traité par l'historique des positions finales sur GPU ; une
+paire réelle donne 0,193 pixel d'erreur médiane sur 280 correspondances valides.
+Les surfaces répétées et les désocclusions restent des limites de qualité.
 
 ## Provenance et périmètre
 
@@ -27,7 +31,8 @@ plan et le raccordement GPU GoW3 restent bloquants pour le DLAA.
   concernant le lanceur Rust, la distribution et `runtime_memory.c` restent hors
   périmètre. CMake conserve la base locale et reçoit les cibles expérimentales.
 - Malgré le suffixe `msvc`, les outils utilisés dans les preuves de Dot et pour
-  cette validation sont **Clang/MSYS2 CLANG64, CMake et Ninja**. MSVC n'a pas été validé.
+  cette validation du port sont **Clang/MSYS2 CLANG64, CMake et Ninja**. La passerelle
+  NVIDIA séparée est maintenant compilée avec MSVC 19.44 et exécutée en jeu.
 
 Le dossier source est conservé. Son répertoire `out/` contient environ **2,93 Gio**
 de builds, sessions, captures et preuves locales. Il n'a pas été recopié dans les
@@ -47,7 +52,7 @@ build ni l'état actuel d'une instance du jeu.
 | Santé | Hook passif opt-in et journal borné; santé informative, aucune preuve de vie/mort ni décision de contrôle. |
 | Clavier | Trace passive de S et de l'axe vertical du stick gauche, désactivée par défaut; les tests caractérisent aussi les limites du replay existant. |
 | Automatisation | Modèles et tests synthétiques. Le script de menu est attaché à une ancienne session et à une empreinte précise; ce n'est pas un pilote générique prêt à lancer. |
-| DLAA/NGX | Aucun dispatch DLAA GoW3 ajouté, aucune option activée dans le lanceur. |
+| DLAA/NGX | Dispatch natif 1080p avec jitter et vecteurs GPU, testé sur Gaia par le script de session `--dlaa`. Activation dédiée par processus ; pas encore d'option persistante dans le lanceur standard. |
 
 Les principaux diagnostics exigent des variables de processus explicites
 (`SPARTAN_GOW3_INPUT_DIAGNOSTICS`, `SPARTAN_HEALTH_PASSIVE`, `SPARTAN_KEY_TRACE`)
@@ -122,17 +127,17 @@ même compilées par la cible agrégée. Les notes de Dot et les journaux des
 premiers essais sont conservés; les erreurs corrigées ne sont pas comptées
 comme des passages réussis dans le bilan final.
 
-## Ce qui reste avant un DLAA utilisable
+## Ce qui reste pour généraliser le DLAA
 
-1. Valider sur une vraie scène les constantes, la permutation du shader, les
-   conventions clip/viewport et la profondeur par échantillon correspondant au
-   même producteur et à la même frame.
+1. Étendre au-delà de Gaia à 1080p la validation réelle des constantes,
+   permutations, conventions clip/viewport et profondeur par échantillon.
 2. La capture bornée au cache réel est désormais exécutée sur Gaia. Étendre sa
    validation au-delà des deux intervalles capturés et résoudre les vues encore
    non identifiées dans la provenance globale.
-3. Établir la couleur avant toute interface, les mouvements d'objets, les
-   disocclusions, les coupures caméra et la gestion du jitter/historique.
-4. Implémenter et valider le dispatch NGX et la recomposition de l'interface.
+3. Renforcer l'identité des objets répétés, les disocclusions, les transparences
+   et les coupures caméra. Étendre les essais de jitter et d'historique.
+4. Intégrer une option persistante au lanceur et valider la distribution ; le
+   dispatch NGX et la composition avec le HUD fonctionnent dans l'essai isolé.
 
 Le pilote autonome est un chantier distinct : il lui manque une identité de
 processus attestée par un adaptateur Windows pris en charge, l'état fiable du

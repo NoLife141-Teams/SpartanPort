@@ -3,7 +3,11 @@
 Current integration state: [GoW3 integration review](gow3-integration-status.md).
 The sections below also retain the history of the individual experiments.
 
-This is **input research, not working DLAA**. Nothing is enabled in the launcher,
+The sections below describe the retained input-research stage. The newer
+[native GoW3 DLAA path](gow3-native-dlaa.md) now evaluates NGX in the game under
+an explicit opt-in and has been tested on the Gaia save.
+
+At the input-research stage this was **not working DLAA**. Nothing was enabled in the launcher,
 no NGX evaluation is added, no frame generation is added, and the normal rendering
 path is unchanged when the diagnostic flag is unset. Existing temporal settings
 remain disabled. Do not enable legacy Bloodborne-style camera extraction for GoW3.

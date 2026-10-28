@@ -223,13 +223,13 @@ struct Draw {
 // offsets: a reused index buffer or another submesh must never read uninitialised history.
 class History {
 public:
-    explicit History(uint32_t capacity) : capacity{capacity} {}
+    explicit History(uint32_t capacity,bool strict=false) : capacity{capacity},strict{strict} {}
 
     struct Allocation {
         uint32_t store{}, load{}, vertices{}, instances{}, first_vertex{}, first_instance{};
     };
     struct Stats {
-        uint64_t draws{}, stored{}, loaded{}, unmatched{}, exhausted{}, invalid{}, still{};
+        uint64_t draws{}, stored{}, loaded{}, unmatched{}, exhausted{}, invalid{}, still{}, ambiguous{};
     } stats;
 
     // A small skeleton (weapon, prop; most are static world pieces) only needs history
@@ -254,6 +254,7 @@ public:
     void NextFrame() {
         previous.swap(current);
         current.clear();
+        if(strict) previous_occurrences.swap(occurrences);
         occurrences.clear();
         gate_previous.swap(gate_current);
         gate_current.clear();
@@ -266,6 +267,14 @@ public:
         ++stats.draws;
         Key key{draw, 0};
         key.occurrence = occurrences[key]++;
+        if(strict) {
+            Key unique{draw,0};
+            const auto* previous_count=previous_occurrences.find(unique);
+            if(key.occurrence || (previous_count && *previous_count!=1)) {
+                ++stats.ambiguous;
+                return {};
+            }
+        }
         const uint64_t count = uint64_t(draw.vertices.count) * draw.instances;
         if (!count || uint64_t(draw.vertices.first) + draw.vertices.count - 1 > INT32_MAX ||
             uint64_t(draw.first_instance) + draw.instances > UINT32_MAX) {
@@ -312,8 +321,9 @@ private:
         }
     };
     uint32_t capacity{}, used{};
+    bool strict{};
     uint64_t frame{};
-    FlatMap<Key, uint32_t, Hash> previous, current, occurrences;
+    FlatMap<Key, uint32_t, Hash> previous, current, occurrences, previous_occurrences;
     struct GateHash {
         size_t operator()(const GateKey& key) const {
             uint64_t h = 0;

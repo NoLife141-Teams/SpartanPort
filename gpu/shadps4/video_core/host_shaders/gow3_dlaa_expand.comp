@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0) uniform texture2D filtered_color;
+layout(binding=1) uniform texture2D original_color;
+layout(binding=2,rgba16f) writeonly uniform image2DMS multisample_out;
+void main() {
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy),sz=imageSize(multisample_out);
+    if(any(greaterThanEqual(p,sz))) return;
+    vec4 c=texelFetch(filtered_color,p,0);
+    c.a=texelFetch(original_color,p,0).a;
+    imageStore(multisample_out,p,0,c);
+    imageStore(multisample_out,p,1,c);
+}

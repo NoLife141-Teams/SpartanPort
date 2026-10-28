@@ -9,6 +9,7 @@
 
 #include <array>
 #include "video_core/renderer_vulkan/motion_history.h"
+#include "video_core/renderer_vulkan/gow3_motion.h"
 
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
@@ -43,7 +44,10 @@ public:
     }
 
     /// Rendering of a motion pipeline: the motion attachment (render-target size).
-    void Attach(RenderState& state, u32 width, u32 height);
+    void Attach(RenderState& state, u32 width, u32 height,u64 depth_uid=0);
+    vk::ImageView RecordDiagnosticRead(u32 width,u32 height,u64 depth_uid);
+    const Motion::History::Stats& DiagnosticStats() const { return history.stats; }
+    u32 DiagnosticFlags(u32 index) const { return index && params_mapped?params_mapped[index*8+3]:0; }
 
     /// Start of a frame (display pass).
     void OnFrameStart();
@@ -74,7 +78,8 @@ private:
     static constexpr u32 ParamsPerFrame = 8192;
     // Positions (device local): two halves (current/previous frame) of vec4; element 0 is reserved.
     static constexpr u32 PositionsPerFrame = 4u << 20;
-    Motion::History history{PositionsPerFrame};
+    const u32 capacity=Gow3::MotionDiagnostic()?(1u<<20):PositionsPerFrame;
+    Motion::History history{capacity,Gow3::MotionDiagnostic()};
     Motion::IndexRangeCache index_ranges;
     std::array<u64, FrameSlots> params_ticks{};
     vk::Buffer params_buffer{};
@@ -89,6 +94,8 @@ private:
     vk::UniqueImageView view;
     u32 image_width = 0, image_height = 0;
     bool written = false; ///< this frame's vectors are in the image
+    u64 diagnostic_depth{};
+    bool diagnostic_depth_conflict{};
     vk::ImageLayout image_layout = vk::ImageLayout::eUndefined;
 };
 

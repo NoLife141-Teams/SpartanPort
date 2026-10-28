@@ -247,6 +247,9 @@ struct Batch {
     std::array<std::shared_ptr<Images>,2> snapshots;
     std::unique_ptr<Vulkan::Gow3::Pixels::Extractor> runtime;
     std::array<std::unique_ptr<Vulkan::Gow3::Pixels::Extractor::Output>,2> real_outputs;
+    std::unique_ptr<Vulkan::Gow3::Pixels::Extractor> motion_runtime;
+    std::array<std::unique_ptr<Vulkan::Gow3::Pixels::Extractor::Output>,2> motion_outputs;
+    std::array<VkImageView,2> motion_views{};
     VkImageView swizzled{};
     std::array<std::unique_ptr<Output>,5> outputs; // copies A/B, live C, references A/B
     VkDescriptorPool descriptors{}; VkCommandBuffer cmd{}; VkFence fence{}; VkSemaphore gate{};
@@ -266,12 +269,14 @@ struct Batch {
         }
         completed=true;
         if(runtime) for(auto& out:real_outputs) runtime->MarkCompleted(*out);
+        if(motion_runtime) for(auto& out:motion_outputs) motion_runtime->MarkCompleted(*out);
     }
     ~Batch() {
         // Even an assertion/exception while gated must release and retire this
         // fixture's work before any RAII child destroys an image or buffer.
         try { Complete(); } catch(...) { std::fflush(nullptr); std::_Exit(3); }
         if(swizzled) vkDestroyImageView(c.device,swizzled,nullptr);
+        for(auto view:motion_views) if(view) vkDestroyImageView(c.device,view,nullptr);
         if(cmd) vkFreeCommandBuffers(c.device,c.pool,1,&cmd); if(fence) vkDestroyFence(c.device,fence,nullptr); if(gate) vkDestroySemaphore(c.device,gate,nullptr);
         if(descriptors) vkDestroyDescriptorPool(c.device,descriptors,nullptr);
     }
@@ -317,6 +322,12 @@ struct Batch {
         alias.components={VK_COMPONENT_SWIZZLE_B,VK_COMPONENT_SWIZZLE_G,VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_ONE};
         alias.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
         Check(vkCreateImageView(c.device,&alias,nullptr,&swizzled),"swizzled runtime source view");
+        for(unsigned i=0;i<2;++i) {
+            alias.components={VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_G,
+                i?VK_COMPONENT_SWIZZLE_ONE:VK_COMPONENT_SWIZZLE_ZERO,
+                i?VK_COMPONENT_SWIZZLE_A:VK_COMPONENT_SWIZZLE_ZERO};
+            Check(vkCreateImageView(c.device,&alias,nullptr,&motion_views[i]),"motion packing test view");
+        }
         for(unsigned i=0;i<2;++i) { snapshots[i]=std::make_shared<Images>(c,source->logical,source->generation); snapshots[i]->Create(VK_NULL_HANDLE); }
         for(unsigned i=0;i<5;++i) outputs[i]=std::make_unique<Output>(c,Token{first_frame+(i<3?i:i-3),source->logical,source->generation,0});
         const std::array<VkDescriptorPoolSize,2> sizes{{{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,15},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,5}}};
@@ -324,8 +335,10 @@ struct Batch {
         VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; alloc.commandPool=c.pool; alloc.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY; alloc.commandBufferCount=1; Check(vkAllocateCommandBuffers(c.device,&alloc,&cmd),"commands");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; Check(vkBeginCommandBuffer(cmd,&begin),"begin");
         Render(first_frame); SourceReadable(); Extract(*outputs[3],*source);
+        motion_runtime->Record(cmd,*motion_outputs[0],{source->depth.sampled,source->depth.layout},{source->color.sampled,source->color.layout},{motion_views[0],source->color.layout});
         runtime->Record(cmd,*real_outputs[0],{source->depth.sampled,source->depth.layout},{swizzled,source->color.layout}); Copy(*snapshots[0]);
         Render(first_frame+1); SourceReadable(); Extract(*outputs[4],*source);
+        motion_runtime->Record(cmd,*motion_outputs[1],{source->depth.sampled,source->depth.layout},{source->color.sampled,source->color.layout},{motion_views[1],source->color.layout});
         runtime->Record(cmd,*real_outputs[1],{source->depth.sampled,source->depth.layout},{source->color.sampled,source->color.layout}); Copy(*snapshots[1]);
         Render(first_frame+2); SourceReadable();
         // Read both retained copies only AFTER the live producer has been overwritten.
@@ -425,6 +438,10 @@ int main(int argc,char** argv) {
         Require(shader_bytes>0 && shader_bytes%4==0 && shader_bytes<1024*1024,"runtime shader size");
         std::vector<uint32_t> runtime_spv(size_t(shader_bytes)/4); shader.seekg(0); shader.read(reinterpret_cast<char*>(runtime_spv.data()),shader_bytes);
         Require(bool(shader),"runtime shader read");
+        std::ifstream ms(std::filesystem::path(argv[1])/"runtime-motion.comp.spv",std::ios::binary|std::ios::ate);
+        Require(bool(ms),"motion extraction shader unavailable"); const auto mn=ms.tellg();
+        Require(mn>0 && mn%4==0 && mn<1024*1024,"motion shader size");
+        std::vector<uint32_t> motion_spv(size_t(mn)/4);ms.seekg(0);ms.read(reinterpret_cast<char*>(motion_spv.data()),mn);Require(bool(ms),"motion shader read");
         Require(Vulkan::Gow3::Pixels::ByteSize(1920,1080)==82944000 &&
                 Vulkan::Gow3::Pixels::ByteSize(0,1)==0 && Vulkan::Gow3::Pixels::ByteSize(1921,1080)==0,"pixel dimension bounds");
         unsigned delayed=0,retired=0,early_rejected=0,overwrite_controls=0,exact_copies=0;
@@ -437,6 +454,8 @@ int main(int argc,char** argv) {
                 Batch batch(c,fixture,registry);
                 batch.runtime=std::make_unique<Vulkan::Gow3::Pixels::Extractor>(c.device,vkGetDeviceProcAddr,c.memory,c.properties.limits.maxStorageBufferRange,runtime_spv);
                 for(auto& out:batch.real_outputs) out=batch.runtime->Allocate(W,H);
+                batch.motion_runtime=std::make_unique<Vulkan::Gow3::Pixels::Extractor>(c.device,vkGetDeviceProcAddr,c.memory,c.properties.limits.maxStorageBufferRange,motion_spv,8);
+                for(auto& out:batch.motion_outputs) out=batch.motion_runtime->Allocate(W,H);
                 bool cap=false; try { batch.runtime->Allocate(W,H); } catch(const std::exception&) { cap=true; }
                 Require(cap,"runtime third allocation accepted");
                 batch.Record(1+(generation-1)*3); batch.SubmitHeld(); ++delayed;
@@ -460,6 +479,16 @@ int main(int argc,char** argv) {
                                 pixel[4]==values[i][n].depth_pixel[0],"production extraction differs from independent fixture");
                     }
                     std::printf("PASS production extractor frame=%u samples=%zu float-bits-match=true BGR1-view=%u later-overwrite-preserved=true\n",batch.outputs[i]->token[0],values[i].size(),i==0);
+                    const auto motion_raw=batch.motion_runtime->ReadCompleted(*batch.motion_outputs[i]);
+                    Require(motion_raw.size()==W*H*2*8*sizeof(float),"motion extraction size");
+                    for(size_t n=0;n<values[i].size();++n) {
+                        std::array<float,8> pixel{}; std::memcpy(pixel.data(),motion_raw.data()+n*sizeof(pixel),sizeof(pixel));
+                        const auto& ref=values[i][n];
+                        Require(std::memcmp(pixel.data(),ref.linear.data(),4*sizeof(float))==0 && pixel[4]==ref.depth_pixel[0],"motion path changes color/depth");
+                        Require(pixel[5]==ref.linear[0] && pixel[6]==ref.linear[1],"motion components changed");
+                        Require(i?(!std::signbit(pixel[7]) && pixel[7]==ref.linear[3]):(std::signbit(pixel[7]) && pixel[7]==0),"validity/depth sign encoding lost (including negative zero)");
+                    }
+                    std::puts("PASS production motion extraction: two samples, exact color/depth and motion, validity including negative zero, delayed GPU/overwrite");
                 }
                 // Independent live-source read proves the producer was overwritten;
                 // forging old metadata cannot make that new content pass as frame A.

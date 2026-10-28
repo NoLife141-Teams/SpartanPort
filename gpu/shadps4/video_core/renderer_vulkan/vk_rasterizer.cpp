@@ -5,6 +5,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <bit>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <xxhash.h>
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "spartanport_toggles.h"
@@ -77,7 +80,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
                     gow3_pair->Enabled() ? "armed" : "disabled: invalid paths");
     }
     if (gow3_inputs_enabled) {
-        std::printf("GoW3 inputs: diagnostic only; DLAA disabled, stable ring snapshots required\n");
+        std::printf("GoW3 inputs: camera diagnostics; stable ring snapshots required; native DLAA requested=%u\n",Gow3::NativeDlaaRequested());
     }
     if(gow3_provenance_enabled && Gow3::Provenance::Requested(std::getenv("SPARTAN_GOW3_PIXELS"))) {
         try {
@@ -90,6 +93,8 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     scene_targets = std::make_unique<SceneTargets>(instance, scheduler, runtime, texture_cache);
     // Object motion first: it fixes the buffer addresses the motion shader variants embed.
     object_motion = std::make_unique<ObjectMotion>(instance, scheduler);
+    gow3_dlaa = std::make_unique<Gow3Dlaa>(instance,scheduler);
+    if(gow3_dlaa->Enabled()) texture_cache.EnableProvenance();
     camera_motion = std::make_unique<CameraMotion>(instance, scheduler, texture_cache, runtime);
     camera_motion->SetObjectMotion(object_motion.get());
     upscaler = std::make_unique<TemporalUpscaler>(instance, scheduler, texture_cache, runtime,
@@ -1153,7 +1158,46 @@ void Rasterizer::RecordGow3Pixels() {
                    texture_cache.GetImage(color.first).image_uid!=sources[1].uid;
     if(db_desc.first) allowed &= texture_cache.GetImage(db_desc.first).image_uid!=sources[0].uid &&
                                texture_cache.GetImage(db_desc.first).image_uid!=sources[1].uid;
-    gow3_pixels->Record(*row,sources[0],layouts[0],sources[1],layouts[1],scheduler,texture_cache,allowed);
+    Gow3::Pixels::Source motion{};
+    if(Gow3::MotionDiagnostic() && gow3_pixels->Wants(row->interval) && !scheduler.HasActiveRendering()) {
+        const auto view=object_motion->RecordDiagnosticRead(1920,1080,sources[0].uid);
+        motion={VkImageView(view),VK_IMAGE_LAYOUT_GENERAL};
+    }
+    gow3_pixels->Record(*row,sources[0],layouts[0],sources[1],layouts[1],scheduler,texture_cache,allowed,motion);
+}
+
+void Rasterizer::ProcessGow3Dlaa(const GraphicsPipeline* pipeline) {
+    if(!gow3_dlaa->Enabled()) return;
+    const auto& key=pipeline->GetGraphicsKey();
+    if(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash!=0x475a41468b1a1fbcull ||
+       pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash!=0x475a4146e3a74097ull ||
+       key.stage_hashes[u32(Shader::SwStage::Vertex)]!=0xefd04d8023fec408ull ||
+       key.stage_hashes[u32(Shader::SwStage::Fragment)]!=0xefd0530963dc1d55ull) return;
+    Gow3::Provenance::Identity sources[2]{};
+    vk::ImageLayout layouts[2]{};
+    vk::DescriptorImageInfo* color_binding=nullptr;
+    u32 found=0;
+    for(auto& write:set_writes) {
+        if(write.dstBinding<1 || write.dstBinding>2 || write.dstArrayElement || write.descriptorCount!=1 ||
+           write.descriptorType!=vk::DescriptorType::eSampledImage || !write.pImageInfo) continue;
+        const auto index=u32(write.pImageInfo-image_infos.data());
+        if(index>=image_infos.size() || index>=gow3_dlaa_bindings.size()) continue;
+        const u32 n=write.dstBinding-1;
+        sources[n]=gow3_dlaa_bindings[index];layouts[n]=write.pImageInfo->imageLayout;found|=1u<<n;
+        if(n==1) color_binding=&image_infos[index];
+    }
+    vk::ImageView depth{},color{},motion{};u32 w=0,h=0;
+    if(found==3 && !scheduler.HasActiveRendering()) {
+        std::array<u32,8> components{};
+        const char* error=texture_cache.WithPixelSources(sources[0],layouts[0],sources[1],layouts[1],components,
+            [&](vk::ImageView d,vk::ImageView c,u32 width,u32 height){depth=d;color=c;w=width;h=height;});
+        if(!error) motion=object_motion->RecordDiagnosticRead(w,h,sources[0].uid);
+    }
+    const auto replacement=gow3_dlaa->Process(depth,layouts[0],color,layouts[1],motion,sources[0].uid,w,h);
+    if(replacement && color_binding) { color_binding->imageView=replacement;color_binding->imageLayout=vk::ImageLayout::eGeneral; }
+    // Composition closes exactly one produced scene, even when a queued flip
+    // happens to contain two scenes. Accepted-flip diagnostics remain independent.
+    object_motion->OnFrameStart();
 }
 
 void Rasterizer::RecordGow3PairDraw(const RenderState& state, bool indirect, bool square) {
@@ -1164,9 +1208,13 @@ void Rasterizer::RecordGow3PairDraw(const RenderState& state, bool indirect, boo
     row->proxy_path=upscaler->Enabled() || camera_motion->Enabled() ||
                     target_scale[0]!=1.f || target_scale[1]!=1.f;
     row->color_count=state.num_color_attachments;
+    if(Gow3::MotionDiagnostic() && motion_draw) {
+        row->diagnostic_motion_attachment_excluded=true;
+        row->color_count=0;
+    }
     if(row->provenance_details) {
         row->provenance_bindings_lost=gow3_image_provenance.Lost();
-        for(u32 i=0;i<std::min<u32>(state.num_color_attachments,8);++i)
+        for(u32 i=0;i<std::min<u32>(row->color_count,8);++i)
             row->color_provenance[i]=texture_cache.DescribeProvenance(cb_descs[i].first,state.color_attachments[i].image_view);
         row->depth_provenance=texture_cache.DescribeProvenance(db_desc.first,state.depth_stencil_attachment.image_view);
         gow3_pair->ProvenanceEvents(texture_cache.DrainProvenance(),"after_recording");
@@ -1233,7 +1281,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             camera_motion->InvalidateHistory();
         }
         camera_motion->SetJitter(upscaler->Jitter());
-        object_motion->OnFrameStart();
+        if(!Gow3::MotionDiagnostic()) object_motion->OnFrameStart();
         NoteFrameStart();
         static const char* scene_debug = std::getenv("SPARTAN_SCENE_DEBUG");
         scene_debug_frame = scene_debug && std::remove(scene_debug) == 0;
@@ -1288,11 +1336,38 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
 
     // spartanport: screen-space (clip disabled) draws into the upscaler's output-size images.
     RecordGow3Pixels();
+    ProcessGow3Dlaa(pipeline);
     push_data.xscale *= target_scale[0];
     push_data.xoffset *= target_scale[0];
     push_data.yscale *= target_scale[1];
     push_data.yoffset *= target_scale[1];
-    if (motion_draw && motion_geometry) {
+    if(motion_draw && motion_geometry && Gow3::MotionDiagnostic()) {
+        const auto& vs=pipeline->GetStage(Shader::SwStage::Vertex);
+        const auto [base_vertex,first_instance]=GetDrawOffsets(regs,vs,pipeline->GetFetchShader());
+        const auto* object=FindRingBinding(vs,1);
+        push_data.motion_param=0;
+        if(object && object->address && (!is_indexed || index_bind.motion_snapshot)) {
+            // GoW3 rotates its object constants each frame (observed 32 MiB apart).
+            // Their address is provenance, not persistent object identity. Match exact
+            // geometry/topology/range instead; strict history rejects repeated meshes.
+            const u64 object_key[]={motion_geometry,pipeline->GetGraphicsKey().stage_hashes[u32(Shader::SwStage::Vertex)],
+                db_desc.first?texture_cache.GetImage(db_desc.first).image_uid:0,
+                u64(std::bit_cast<u32>(push_data.xscale))<<32|std::bit_cast<u32>(push_data.yscale),
+                u64(std::bit_cast<u32>(push_data.xoffset))<<32|std::bit_cast<u32>(push_data.yoffset)};
+            const auto identity=XXH3_64bits(object_key,sizeof(object_key));
+            push_data.motion_param=object_motion->PrepareDraw({
+                .shader=vs.pgm_hash,.geometry=identity,
+                .indices=is_indexed?regs.index_base_address.Address<VAddr>()+u64(index_offset)*(index_bind.type==vk::IndexType::eUint16?2:4):0,
+                .topology=is_indexed?index_bind.motion_topology:0,.index_count=regs.num_indices,
+                .instances=regs.num_instances.NumInstances(),.first_instance=first_instance,
+                .vertices=is_indexed?index_bind.motion_range:Motion::VertexRange{base_vertex,regs.num_indices}});
+            if(auto* row=gow3_pair?gow3_pair->Pending():nullptr) {
+                row->motion_geometry_key=identity; row->motion_object_buffer=object->address;
+                row->motion_flags=object_motion->DiagnosticFlags(push_data.motion_param);
+                row->motion_index_snapshot=index_bind.motion_snapshot;
+            }
+        }
+    } else if (motion_draw && motion_geometry) {
         const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
         const auto [base_vertex, first_instance] =
             GetDrawOffsets(regs, vs, pipeline->GetFetchShader());
@@ -1382,6 +1457,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1)) {
         draw_jitter = upscaler->Jitter();
     }
+    if(gow3_dlaa->Active() && db_desc.first && !regs.IsClipDisabled() &&
+       texture_cache.GetImage(db_desc.first).image_uid==gow3_dlaa->Depth()) draw_jitter=gow3_dlaa->Jitter();
     UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     scheduler.BeginRendering(state);
@@ -1519,6 +1596,8 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth()) {
         draw_jitter = upscaler->Jitter();
     }
+    if(gow3_dlaa->Active() && db_desc.first && !Regs().IsClipDisabled() &&
+       texture_cache.GetImage(db_desc.first).image_uid==gow3_dlaa->Depth()) draw_jitter=gow3_dlaa->Jitter();
     UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     scheduler.BeginRendering(state);
@@ -1772,7 +1851,12 @@ void Rasterizer::FinishGow3Flip(Gow3::Flip flip) {
         gow3_pair->ProvenanceEvents(texture_cache.DrainProvenance(),"before_accepted_flip",flip.id);
     if (gow3_pair) gow3_pair->Boundary(flip,frame->number,frame->status);
     if(gow3_pixels) gow3_pixels->Boundary(*frame,gow3_frames.Inputs(),
-        gow3_pair && gow3_pair->GetStats().state==Gow3::Pair::State::Active);
+        gow3_pair && gow3_pair->GetStats().state==Gow3::Pair::State::Active,object_motion->DiagnosticStats());
+    if(gow3_dlaa->OnFlip()) object_motion->InvalidateHistory();
+    if(Gow3::MotionDiagnostic() && object_motion->Enabled() && !gow3_dlaa->Enabled()) {
+        if(frame->status!=Gow3::Status::Candidate) object_motion->InvalidateHistory();
+        object_motion->OnFrameStart();
+    }
     if (gow3_trace_enabled) {
         Gow3::Trace::WriteOrderedInterval(gow3_trace.Finish(flip, {
             .number=frame->number, .color=flip.address,
@@ -1784,10 +1868,10 @@ void Rasterizer::FinishGow3Flip(Gow3::Flip flip) {
         char note[1024];
         const auto reasons = Gow3::FormatSnapshotCounts(frame->snapshot_reasons);
         std::snprintf(note, sizeof(note),
-            "GoW3 inputs: frame=%llu flip=%llu buffer=%d eop=%u status=%s samples=%u unsnapshotted=%u size=%ux%u DLAA=blocked snapshot-reasons=%s\n",
+            "GoW3 inputs: frame=%llu flip=%llu buffer=%d eop=%u status=%s samples=%u unsnapshotted=%u size=%ux%u DLAA=%s snapshot-reasons=%s\n",
             (unsigned long long)frame->number, (unsigned long long)flip.id, flip.buffer,
             unsigned(flip.eop), Gow3::Name(frame->status), frame->samples,
-            frame->unsnapshotted, frame->width, frame->height, reasons.data());
+            frame->unsnapshotted, frame->width, frame->height, Gow3::NativeDlaaRequested()?"separate-native-hook":"blocked", reasons.data());
         std::printf("%s", note);
         if (FrameCapture::Active()) FrameCapture::Note(note);
     }
@@ -1916,6 +2000,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     set_writes.clear();
     buffer_infos.clear();
     image_infos.clear();
+    if(gow3_dlaa->Enabled()) gow3_dlaa_bindings={};
     if(gow3_provenance_enabled) {
         const auto* row=pipeline->IsCompute() ? nullptr : gow3_pair->Pending();
         gow3_image_provenance.Begin(row ? row->serial : 0,row ? row->interval : 0);
@@ -2262,6 +2347,28 @@ void Rasterizer::ResolveIndexBuffer(u32 index_offset) {
         buffer_cache.ObtainBuffer(index_address, index_buffer_size, false);
     needs_barrier |= runtime.IsBufferAccessed(buffer, offset, index_buffer_size);
     index_bind = {buffer->Handle(), offset, index_type};
+#ifdef _WIN32
+    if(motion_draw && Gow3::MotionDiagnostic() && index_buffer_size && index_buffer_size<=1024*1024 &&
+       !buffer_cache.IsRegionGpuModified(index_address,index_buffer_size) && !PendingWriteOverlaps(index_address,index_buffer_size)) {
+        // Bind/hash/scan the SAME immutable snapshot; inaccessible guest pages fail.
+        gow3_index_snapshot.resize(index_buffer_size); SIZE_T copied{};
+        if(ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<const void*>(index_address),
+            gow3_index_snapshot.data(),index_buffer_size,&copied) && copied==index_buffer_size) {
+            auto& stream=buffer_cache.GetStreamBuffer();
+            const auto [data,at]=stream.Map(index_buffer_size,16,false);
+            if(data) {
+                std::memcpy(data,gow3_index_snapshot.data(),index_buffer_size);
+                const auto& vs=draw_inputs.pipeline->GetStage(Shader::SwStage::Vertex);
+                const auto [base,first]=GetDrawOffsets(regs,vs,draw_inputs.pipeline->GetFetchShader()); (void)first;
+                index_bind.motion_range=is_index16?
+                    Motion::IndexedRange(std::span(reinterpret_cast<const u16*>(data),regs.num_indices),s32(base),bool(regs.enable_primitive_restart)):
+                    Motion::IndexedRange(std::span(reinterpret_cast<const u32*>(data),regs.num_indices),s32(base),bool(regs.enable_primitive_restart));
+                index_bind.motion_topology=XXH3_64bits(data,index_buffer_size);
+                stream.Commit(); index_bind.handle=stream.Handle(); index_bind.offset=at; index_bind.motion_snapshot=true;
+            }
+        }
+    }
+#endif
 }
 
 void Rasterizer::ResetBindings(bool is_compute) {
@@ -2446,6 +2553,7 @@ void Rasterizer::ObserveGow3Inputs(const Shader::Info& stage, u32 slot,
     gow3_frames.Observe(stage.pgm_hash, slot, snapshot, size, depth.info.guest_address,
                         depth.info.size.width, depth.info.size.height,
                         reason);
+    gow3_dlaa->Observe(stage.pgm_hash,slot,snapshot,size,depth.image_uid,depth.info.size.width,depth.info.size.height);
 }
 
 void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* prepared,
@@ -2645,8 +2753,10 @@ Rasterizer::ImageDescCacheEntry& Rasterizer::CachedImageDescEntry(const AmdGpu::
 void Rasterizer::NoteGow3Binding(VideoCore::ImageId id,Gow3::Provenance::Path path) {
     // Same sole-writer ownership as image_infos, including the helper's partial
     // completion. No access to Pair::Capture from the helper thread.
-    if(!gow3_provenance_enabled || !gow3_image_provenance.Enabled()) return;
     const auto index=u32(image_infos.size()-1);
+    if(gow3_dlaa->Enabled() && index<gow3_dlaa_bindings.size())
+        gow3_dlaa_bindings[index]=texture_cache.DescribeProvenance(id,image_infos.back().imageView);
+    if(!gow3_provenance_enabled || !gow3_image_provenance.Enabled()) return;
     if(index>=Gow3::Provenance::Bindings::Capacity) {
         gow3_image_provenance.Set(index,{},path); return;
     }
@@ -3476,7 +3586,7 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     }
     // spartanport: object motion vector attachment of G-buffer pipelines.
     if (key.motion_vectors) {
-        object_motion->Attach(state, state.width, state.height);
+        object_motion->Attach(state, state.width, state.height,db_desc.first?texture_cache.GetImage(db_desc.first).image_uid:0);
     }
     return state;
 }
