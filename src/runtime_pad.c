@@ -1,5 +1,6 @@
 /* libScePad on SDL3 gamepads, with a keyboard fallback. SDL events are pumped
- * by the window thread (gpu/shim/window.cpp); here state is only sampled.
+ * by the window thread (gpu/shim/window.cpp); state is sampled here. The opt-in
+ * diagnostic UI key buffer also preserves brief S/Space events for 100 ms.
  *
  * Default keyboard layout (SPARTAN_KEY_MAP changes the buttons, see apply_button_map):
  *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
@@ -25,6 +26,7 @@
 #define SPARTAN_KEY_TRACE_DISABLED_STUBS
 #endif
 #include "keyboard_trace_bridge.h"
+#include "ui_key_buffer.h"
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
 #define ERR_INVALID_HANDLE ((int32_t)0x80920003)
@@ -202,6 +204,55 @@ static int mouse_source(const char *name) {
 static SDL_AtomicInt wheel_ticks[2]; /* notches not yet played: 0 up, 1 down */
 static struct { int phase; uint64_t until; } wheel_pulse[2]; /* phase 0 idle, 1 pressed, 2 gap */
 static SDL_AtomicInt mouse_motion[2]; /* x, y moved since the last read, in 1/16 px (stick prompts) */
+/* Diagnostic-only event preservation for brief UI key presses. A fixed 100 ms
+ * sampler pulse, never an OS hold, sequence, repeat or persistent command. */
+static SDL_AtomicInt ui_key_buffer;
+static uint64_t ui_key_deadline[2]; /* window thread publishes, pad reader consumes */
+static uint64_t ui_key_context;
+static uint32_t ui_key_generation; /* window thread only */
+static SDL_AtomicInt ui_key_log_count;
+enum { UI_KEY_TTL_US=100000 };
+static void drop_ui_keys(void) {
+    for (unsigned i=0;i<2;++i) __atomic_store_n(&ui_key_deadline[i],0,__ATOMIC_RELEASE);
+}
+void spartanport_ui_key_context(uint32_t window, int allowed) {
+    const uint64_t desired=((uint64_t)window<<1) | (allowed!=0);
+    const uint64_t old=__atomic_load_n(&ui_key_context,__ATOMIC_ACQUIRE);
+    if ((old&0x1ffffffffull)==desired) return;
+    drop_ui_keys();
+    const uint64_t next=((uint64_t)(++ui_key_generation&0x7fffffffu)<<33) | desired;
+    __atomic_store_n(&ui_key_context,next,__ATOMIC_RELEASE);
+}
+void spartanport_ui_key_event(uint32_t window, uint32_t scancode, int repeat) {
+    if (!SDL_GetAtomicInt(&ui_key_buffer)) return;
+    if (repeat) return;
+    const int index=scancode==SDL_SCANCODE_S ? 0 : scancode==SDL_SCANCODE_SPACE ? 1 : -1;
+    if (index<0) return;
+    const uint64_t context=__atomic_load_n(&ui_key_context,__ATOMIC_ACQUIRE);
+    const bool allowed=(context&1) && (uint32_t)(context>>1)==window;
+    if (SDL_AddAtomicInt(&ui_key_log_count,1)<32)
+        printf("UI key buffer: event key=%d window=%u allowed=%d\n",index,window,(int)allowed);
+    if (!allowed) {
+        drop_ui_keys(); return;
+    }
+    __atomic_store_n(&ui_key_deadline[index],now_us()+UI_KEY_TTL_US,__ATOMIC_RELEASE);
+}
+static void consume_ui_keys(bool *keys,uint64_t now) {
+    const uint64_t context=__atomic_load_n(&ui_key_context,__ATOMIC_ACQUIRE);
+    const bool allowed=(context&1) && !spartanportgpu_overlay_captures_input();
+    for (unsigned i=0;i<2;++i) {
+        uint64_t deadline=__atomic_load_n(&ui_key_deadline[i],__ATOMIC_ACQUIRE);
+        if (deadline && SDL_AddAtomicInt(&ui_key_log_count,1)<32)
+            printf("UI key buffer: sample key=%u allowed=%d fresh=%d\n",i,(int)allowed,
+                   (int)(deadline>=now && deadline-now<=UI_KEY_TTL_US));
+        if (allowed && context==__atomic_load_n(&ui_key_context,__ATOMIC_ACQUIRE) &&
+            deadline && deadline>=now && deadline-now<=UI_KEY_TTL_US) {
+            keys[i ? SDL_SCANCODE_SPACE : SDL_SCANCODE_S]=true;
+        } else if (deadline) {
+            __atomic_compare_exchange_n(&ui_key_deadline[i],&deadline,0,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE);
+        }
+    }
+}
 /* Runs on the window thread for every queued event (SDL_AddEventWatch). */
 static bool SDLCALL mouse_watch(void *userdata, SDL_Event *event) {
     (void)userdata;
@@ -220,6 +271,8 @@ static bool SDLCALL mouse_watch(void *userdata, SDL_Event *event) {
 static void watch_wheel(void) {
     static bool watching;
     if (watching || !SDL_WasInit(SDL_INIT_VIDEO)) return;
+    const char *buffer=getenv("SPARTAN_UI_KEY_BUFFER");
+    SDL_SetAtomicInt(&ui_key_buffer,buffer && !strcmp(buffer,"1"));
     watching=SDL_AddEventWatch(mouse_watch,NULL);
 }
 static void drop_wheel(void) {
@@ -509,6 +562,7 @@ static void sample_host(PadData *d, SpartanKeyTraceRead *trace) {
     watch_wheel();
     if (spartanportgpu_overlay_captures_input()) {
         if (trace) trace->flags|=KT_HOST_BLOCK;
+        if (SDL_GetAtomicInt(&ui_key_buffer)) drop_ui_keys();
         drop_wheel(); return;
     } /* settings menu open: neutral input */
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
@@ -545,7 +599,14 @@ static void sample_host(PadData *d, SpartanKeyTraceRead *trace) {
     const SDL_MouseButtonFlags mouse=SDL_GetMouseState(NULL,NULL);
     const bool wheel[2]={wheel_held(0,d->timestamp),wheel_held(1,d->timestamp)};
     if (trace) trace->flags|=KT_S_VALID | (k[SDL_SCANCODE_S] ? KT_S_BEFORE : 0);
-    sample_keyboard(d,k,mouse,wheel);
+    const bool *sampled_keys=k;
+    bool buffered_keys[SDL_SCANCODE_COUNT];
+    if (SDL_GetAtomicInt(&ui_key_buffer)) {
+        memcpy(buffered_keys,k,sizeof(buffered_keys));
+        consume_ui_keys(buffered_keys,d->timestamp);
+        sampled_keys=buffered_keys;
+    }
+    sample_keyboard(d,sampled_keys,mouse,wheel);
     if (trace && k[SDL_SCANCODE_S]) trace->flags|=KT_S_AFTER;
 }
 

@@ -15,6 +15,14 @@
 #include <SDL3/SDL.h>
 
 #include "sdl_window.h"
+#include "../src/ui_key_buffer.h"
+#include "../src/keyboard_trace_bridge.h"
+extern "C" void spartanport_ui_key_context(uint32_t, int) {}
+extern "C" void spartanport_ui_key_event(uint32_t, uint32_t, int) {}
+extern "C" int spartanport_key_trace_enabled(void) { return 0; }
+extern "C" void spartanport_key_trace_window(uint32_t, uint32_t, int) {}
+extern "C" void spartanport_key_trace_s(uint32_t, uint32_t, int, int) {}
+extern "C" void spartanport_key_trace_tick(void) {}
 
 // Stubs for overlay functions referenced by WindowSDL when linked in tests
 namespace SpartanOverlay {

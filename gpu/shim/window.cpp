@@ -11,6 +11,7 @@
 #include "spartanport_graphics.h"
 #include "spartanport_settings.h"
 #include "../../src/keyboard_trace_bridge.h"
+#include "../../src/ui_key_buffer.h"
 
 namespace Frontend {
 
@@ -192,6 +193,12 @@ bool WindowSDL::PollEvents() {
                (SpartanOverlay::CapturesInput() ? KT_CAPTURE : 0u) |
                (text_active ? KT_TEXT : 0u);
     };
+    static const bool ui_key_buffer = [] {
+        const char* value=std::getenv("SPARTAN_UI_KEY_BUFFER");
+        return value && std::string_view(value)=="1";
+    }();
+    if (ui_key_buffer)
+        spartanport_ui_key_context(SDL_GetWindowID(window),key_trace_context()==KT_FOCUS);
     if (spartanport_key_trace_enabled())
         spartanport_key_trace_window(SDL_GetWindowID(window), key_trace_context(), 1);
     {
@@ -211,6 +218,11 @@ bool WindowSDL::PollEvents() {
     }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        if (ui_key_buffer) {
+            spartanport_ui_key_context(SDL_GetWindowID(window),key_trace_context()==KT_FOCUS);
+            if (event.type==SDL_EVENT_KEY_DOWN)
+                spartanport_ui_key_event(event.key.windowID,event.key.scancode,event.key.repeat);
+        }
         if (spartanport_key_trace_enabled() &&
             (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
             event.key.scancode == SDL_SCANCODE_S) {
@@ -316,6 +328,8 @@ bool WindowSDL::PollEvents() {
         spartanport_key_trace_window(SDL_GetWindowID(window), key_trace_context(), 0);
         spartanport_key_trace_tick();
     }
+    if (ui_key_buffer)
+        spartanport_ui_key_context(SDL_GetWindowID(window),key_trace_context()==KT_FOCUS);
     return is_open;
 }
 

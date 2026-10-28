@@ -191,6 +191,12 @@ endif()
 # linked here, where CMake knows its dependencies (build.sh builds them with ninja).
 if (WIN32)
     enable_language(RC)
+    add_executable(ui-key-buffer-test EXCLUDE_FROM_ALL
+        ../tests/test_ui_key_buffer.c ../src/compat_win.c)
+    set_target_properties(ui-key-buffer-test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
+    target_compile_options(ui-key-buffer-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_include_directories(ui-key-buffer-test PRIVATE .. ../src)
+    target_link_libraries(ui-key-buffer-test PRIVATE PkgConfig::SDL3 bcrypt -pthread)
     # Experimental passive health diagnostics: CPU-only fixtures, no GPU/game startup.
     add_executable(health-passive-bridge-test EXCLUDE_FROM_ALL
         ../tests/test_health_passive_bridge.cpp shim/spartanport_health_passive.cpp)
@@ -615,5 +621,5 @@ add_custom_target(gow3-diagnostics-tests DEPENDS
 if (WIN32)
     add_dependencies(gow3-diagnostics-tests
         health-passive-bridge-test health-inline-test health-lifecycle-test
-        health-collection-test keyboard-trace-test keyboard-trace-bridge-test)
+        health-collection-test keyboard-trace-test keyboard-trace-bridge-test ui-key-buffer-test)
 endif()

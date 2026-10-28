@@ -24,7 +24,7 @@ CPU_TARGETS = [
     'gow3-trace-trigger-test', 'health-passive-bridge-test', 'health-inline-test',
     'health-lifecycle-test', 'health-collection-test', 'keyboard-trace-test',
     'keyboard-trace-bridge-test', 'motion-history-test', 'ui-composition-test',
-    'upscaler-support-test', 'actor-hook-test',
+    'upscaler-support-test', 'actor-hook-test', 'ui-key-buffer-test',
 ]
 DIRECTORY_ARGUMENT = {
     'gow3-pair-capture-test', 'gow3-group-capture-test', 'gow3-capture-bytes-test',

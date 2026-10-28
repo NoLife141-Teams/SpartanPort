@@ -5,7 +5,9 @@ Revue du 27 octobre 2026, heure de Toronto.
 Le travail de Dot est rapatrié dans ce dépôt sur la branche
 `codex/integrate-dot-gow3-diagnostics`. Il constitue une base de recherche et
 d'instrumentation expérimentale. **Le DLAA natif GoW3 n'est pas fonctionnel et
-le chargement/déplacement autonome n'est pas opérationnel.**
+le pilote autonome sans supervision n'est pas opérationnel.** Le chargement
+et une collecte sous pilotage visuel de l'agent sont désormais validés; voir
+[le protocole et les résultats réels](gow3-supervised-control.md).
 
 ## Provenance et périmètre
 

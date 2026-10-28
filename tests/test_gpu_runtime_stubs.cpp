@@ -6,6 +6,8 @@
 #include <setjmp.h>
 // Renderer tests have no guest process. Clock/host-thread services work; guest accesses abort.
 extern "C" {
+void spartanport_ui_key_context(uint32_t, int) {}
+void spartanport_ui_key_event(uint32_t, uint32_t, int) {}
 thread_local sigjmp_buf* runtime_fault_recover = nullptr;
 uint64_t runtime_disabled_optimizations = 0; // spartanport_toggles.h: 64 bits
 uint64_t runtime_tsc_frequency() { return 1000000000; }
