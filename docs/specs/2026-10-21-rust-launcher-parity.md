@@ -12,6 +12,10 @@ Task 42 of the deepening plan (`docs/plans/2026-10-24-launcher-deepening.md`) me
 `9dd2d12`; the rows of the tests `main` added or changed after 2.7.0 name the Rust tests the later
 tasks of that plan ported them to.
 
+The integration with upstream `f593377` adds the 16 menu-confirmation and trophy rows
+introduced after the launcher cutover. Existing Rust checks are named where they
+cover the behaviour; legacy-migration and AppRun wrapper gaps remain explicit.
+
 Status:
 
 - `ported`: the Rust test is the port of the Python one (same cut, often the same name).
@@ -38,7 +42,7 @@ assertions uncovered are listed under [Partly covered](#partly-covered).
 | `tests/test_launcher_aspect.py` | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `tests/test_launcher_cache.py` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `tests/test_launcher_close_on_play.py` | 5 | 4 | 1 | 0 | 0 | 0 | 0 |
-| `tests/test_launcher_controls.py` | 59 | 29 | 17 | 0 | 0 | 13 | 0 |
+| `tests/test_launcher_controls.py` | 68 | 29 | 22 | 0 | 0 | 17 | 0 |
 | `tests/test_launcher_desktop.py` | 33 | 29 | 3 | 0 | 0 | 1 | 0 |
 | `tests/test_launcher_diagnostics_layout.py` | 3 | 0 | 0 | 3 | 0 | 0 | 0 |
 | `tests/test_launcher_exit_hint.py` | 17 | 10 | 7 | 0 | 0 | 0 | 0 |
@@ -62,12 +66,12 @@ assertions uncovered are listed under [Partly covered](#partly-covered).
 | `tests/test_launcher_translations.py` | 9 | 0 | 1 | 0 | 0 | 8 | 0 |
 | `tests/test_launcher_update.py` | 15 | 11 | 1 | 0 | 0 | 3 | 0 |
 | `tests/test_launcher_upscale.py` | 2 | 0 | 1 | 0 | 0 | 1 | 0 |
-| `tests/test_trophies.py` | 8 | 5 | 1 | 0 | 0 | 2 | 0 |
+| `tests/test_trophies.py` | 15 | 5 | 5 | 0 | 0 | 5 | 0 |
 | `tests/test_button_icons.py` | 4 | 3 | 1 | 0 | 0 | 0 | 0 |
 | `tests/test_controller_mappings.py` | 15 | 15 | 0 | 0 | 0 | 0 | 0 |
 | `tests/test_controller_mapper_launch.py` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `tests/test_controller_mapper_sdl.py` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | **382** | **170** | **86** | **27** | **1** | **98** | **0** |
+| **Total** | **398** | **170** | **95** | **27** | **1** | **105** | **0** |
 
 ## Map
 
@@ -456,6 +460,23 @@ assertions uncovered are listed under [Partly covered](#partly-covered).
 | `tests/test_controller_mapper_sdl.py::SDLIntegrationTest::test_editing_an_existing_sdl_mapping_preserves_guide_and_other_buttons` | `tests/sdl_mapper.rs::editing_an_existing_sdl_mapping_preserves_guide_and_other_buttons` | ported |
 | `tests/test_controller_mapper_sdl.py::SDLIntegrationTest::test_parent_destroy_closes_sdl_without_saving` | `tests/ui_mapper.rs::parent_destroy_closes_sdl_without_saving` | ported |
 
+| `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_conflicting_ini_primary_overrides_alias` | `src/core/ini.rs::tests::menu_confirm_swap_primary_overrides_alias` | replaced by `src/core/ini.rs::tests::menu_confirm_swap_primary_overrides_alias` |
+| `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_conflicting_legacy_settings` | — | dropped: no Rust counterpart — precedence of conflicting menu confirmation choices in legacy settings.json and the ini |
+| `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_game_environment_clears_inherited_alias_and_handles_conflicts` | `src/core/env.rs::tests::inherited_menu_confirm_env_is_not_leaked`, `src/core/env.rs::tests::menu_confirm_swap_in_settings_is_forwarded` | replaced by `src/core/env.rs::tests::inherited_menu_confirm_env_is_not_leaked`, `src/core/env.rs::tests::menu_confirm_swap_in_settings_is_forwarded` |
+| `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_game_environment_forwards_menu_confirm_swap` | `src/core/env.rs::tests::menu_confirm_swap_in_settings_is_forwarded` | replaced by `src/core/env.rs::tests::menu_confirm_swap_in_settings_is_forwarded` |
+| `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_gameplay_controls_and_qte_remain_untouched` | — | dropped: no Rust counterpart — the exact default Cross/Circle gameplay keys and gamepad labels while menu confirmation is swapped |
+| `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_menu_confirm_swap_defaults` | `src/core/ini.rs::tests::menu_confirm_swap_default_is_zero` | replaced by `src/core/ini.rs::tests::menu_confirm_swap_default_is_zero` |
+| `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_menu_confirm_swap_ini_persistence` | `src/core/ini.rs::tests::menu_confirm_swap_persists_in_ini` | replaced by `src/core/ini.rs::tests::menu_confirm_swap_persists_in_ini` |
+| `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_menu_confirm_swap_legacy_migration` | — | dropped: no Rust counterpart — migration of the menu confirmation choice from legacy settings.json into the ini |
+| `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_repeated_load_ini_removes_swap_and_switches_to_alias` | — | dropped: no Rust counterpart — successive reads of one changed ini after removal of the primary confirmation key and its alias |
+| `tests/test_trophies.py::GameTexts::test_english_is_the_ps4_list` | `src/core/env.rs::tests::english_names_are_the_ps4_list` | replaced by `src/core/env.rs::tests::english_names_are_the_ps4_list` |
+| `tests/test_trophies.py::GameTexts::test_every_language_is_written` | `src/core/env.rs::tests::trophy_texts_are_written_in_every_language` | replaced by `src/core/env.rs::tests::trophy_texts_are_written_in_every_language` |
+| `tests/test_trophies.py::TrophyEnvironmentAndPersistence::test_apprun_environment_default_xdg` | — | dropped: no Rust counterpart — the Linux AppRun shell wrapper sets the default XDG data and user directories |
+| `tests/test_trophies.py::TrophyEnvironmentAndPersistence::test_apprun_environment_paths_with_spaces` | — | dropped: no Rust counterpart — the Linux AppRun shell wrapper preserves data and user paths with spaces |
+| `tests/test_trophies.py::TrophyEnvironmentAndPersistence::test_apprun_preserves_external_spartan_user_dir` | — | dropped: no Rust counterpart — the Linux AppRun shell wrapper preserves an external SPARTAN_USER_DIR |
+| `tests/test_trophies.py::TrophyEnvironmentAndPersistence::test_game_environment_propagates_default_and_custom_user_dir` | `src/core/env.rs::tests::game_environment_honors_inherited_spartan_user_dir`, `src/core/env.rs::tests::game_environment_honors_explicit_user_dir_over_inherited_env` | replaced by `src/core/env.rs::tests::game_environment_honors_inherited_spartan_user_dir`, `src/core/env.rs::tests::game_environment_honors_explicit_user_dir_over_inherited_env` |
+| `tests/test_trophies.py::TrophyEnvironmentAndPersistence::test_write_trophy_texts_and_launcher_display_consistency` | `src/core/env.rs::tests::trophy_texts_file_has_35_rows_and_the_labels`, `src/core/trophies.rs::tests::unlocked_bits` | replaced by `src/core/env.rs::tests::trophy_texts_file_has_35_rows_and_the_labels`, `src/core/trophies.rs::tests::unlocked_bits` |
+
 ## Known deviations from the Python
 
 1. Snapshot pixel comparison runs on Windows only; other hosts render and smoke-check (fonts: `Font::MONOSPACE` and Arabic glyphs come from the OS) — spec §7 asked for both CI runners.
@@ -481,6 +502,9 @@ assertions uncovered are listed under [Partly covered](#partly-covered).
 21. The controller mapper is a page of the drawer, opened from the top of Controls (whose tab stays lit), instead of a window over the launcher (`src/ui/pages/mapper.rs`): the drawer header holds its title and note, its table scrolls in the window height less 460 px, and leaving it (Close, Esc, another tab or closing the launcher) lets SDL go without saving. While it is open it takes every key but Esc, as the Python's window held the grab. What opening SDL3 could not read (an unreadable profile) shows in its status line; the Python printed it to a console the windowed launcher does not have. Its dialogs are titled "Set up a controller" and "Could not save mapping", as the Python's message boxes; a mapping that could not be saved names the file. The drawer header keeps its Save button on this page, as on every page: it saves the launcher's settings (active only while they differ from the files), while each mapping row saves itself.
 
 ## Partly covered
+
+- `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_menu_confirm_swap_defaults`: the Rust INI test pins the default value; this row does not assert the Python GUI choice labels.
+- `tests/test_trophies.py::TrophyEnvironmentAndPersistence::test_game_environment_propagates_default_and_custom_user_dir`: the Rust tests pin inherited and explicit user directories; the default empty-directory path is exercised by the general environment fixtures.
 
 Rows marked `ported` or `replaced by` whose Rust tests cover the behaviour but not every assertion of
 the Python test:
@@ -643,3 +667,10 @@ The 98 rows marked `dropped: no Rust counterpart`: Python behaviour that no Rust
 - `tests/test_launcher_upscale.py::UpscalerSettingsTest::test_remaining_choices_have_no_spatial_upscaler` — the upscaler choices are fsr3, taa and off, with no spatial upscaler
 - `tests/test_trophies.py::TrophyTexts::test_every_language_lists_all_trophies` — every language has 35 non-empty trophy texts without the separator bar, within the runtime's 63- and 159-byte buffers (src/core/env.rs::tests::trophy_texts_file_has_35_rows_and_the_labels checks the 35 rows in Portuguese only)
 - `tests/test_trophies.py::PageTexts::test_every_language_has_the_same_texts` — every language has the same trophy page texts, non-empty and with the same {} fields
+- `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_conflicting_legacy_settings` — precedence of conflicting menu confirmation choices in legacy settings.json and the ini
+- `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_gameplay_controls_and_qte_remain_untouched` — the exact default Cross/Circle gameplay keys and gamepad labels while menu confirmation is swapped
+- `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_menu_confirm_swap_legacy_migration` — migration of the menu confirmation choice from legacy settings.json into the ini
+- `tests/test_launcher_controls.py::MenuConfirmSwapTest::test_repeated_load_ini_removes_swap_and_switches_to_alias` — successive reads of one changed ini after removal of the primary confirmation key and its alias
+- `tests/test_trophies.py::TrophyEnvironmentAndPersistence::test_apprun_environment_default_xdg` — the Linux AppRun shell wrapper sets the default XDG data and user directories
+- `tests/test_trophies.py::TrophyEnvironmentAndPersistence::test_apprun_environment_paths_with_spaces` — the Linux AppRun shell wrapper preserves data and user paths with spaces
+- `tests/test_trophies.py::TrophyEnvironmentAndPersistence::test_apprun_preserves_external_spartan_user_dir` — the Linux AppRun shell wrapper preserves an external SPARTAN_USER_DIR

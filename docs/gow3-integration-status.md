@@ -1,5 +1,13 @@
 # État du travail GoW3 de Dot et intégration locale
 
+> Mise à jour du 29 octobre 2026 : le fork `NoLife141-Teams/SpartanPort:main`
+> est synchronisé avec `FelipePrado0/SpartanPort` à `f593377`. La branche
+> `codex/integrate-upstream-dlss5` intègre cet amont au commit `2898c88`, avec
+> DLSS 5 NR + MSAA x2 et F7 conservés. Gaia a été revalidé sur le binaire
+> fusionné ; voir [les résultats et limites](gow3-dlss5-nr-experiment.md#intégration-de-lamont-du-29-octobre-2026).
+> `codex/gow3-dlss5` reste conservée à `d8e6b94`. Le bilan suivant retrace
+> l'import initial et les expériences antérieures.
+
 > État actuel sur `codex/gow3-dlss5` : DLAA natif retiré ;
 > [DLSS 5 NR + MSAA x2](gow3-dlss5-nr-experiment.md) est le profil GoW3 conservé.
 > Les résultats DLAA ci-dessous documentent les travaux précédents.

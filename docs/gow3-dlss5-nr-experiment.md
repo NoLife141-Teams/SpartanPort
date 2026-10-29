@@ -14,15 +14,64 @@ le curseur de netteté et les anciens profils de lancement ont été retirés.
 Le hook dédié `vk_gow3_nr.cpp` conserve les guides, le pré-HUD et F7.
 Les rapports DLAA antérieurs sont conservés comme historique.
 
-Le nettoyage du mode DLAA compile et les 62 contrôles CPU/GPU passent dans
-`out/gow3-validation/20261029T003948321461Z/result.json`. Les 11 tests de
-passerelle NR passent. Le dernier lancement après ce nettoyage n'a pas atteint
-Gaia : Windows a refusé la réservation de 8 128 MiB de mémoire invitée
-(erreur 1450). Cette session `20261029T004009313974Z` ne valide donc pas le
-rendu live du hook renommé ; ses sauvegardes source/backup/runtime sont
-inchangées. Les captures Gaia/MSAA x2 décrites plus bas précèdent le nettoyage.
-Le changement est conservé comme expérimentation locale ; refaire ce smoke
-test lorsque la réservation mémoire du jeu redevient possible.
+Le premier lancement après le nettoyage n'avait pas atteint Gaia : Windows
+avait refusé la réservation de 8 128 MiB de mémoire invitée (erreur 1450,
+session `20261029T004009313974Z`). Les essais d'intégration du 29 octobre
+ci-dessous ont depuis atteint Gaia et validé le hook NR renommé.
+
+## Intégration de l'amont du 29 octobre 2026
+
+`NoLife141-Teams/SpartanPort:main` est avancé sans réécriture vers l'amont
+`f593377bbaf1934bf606171973d7a58210510991`. La branche
+`codex/integrate-upstream-dlss5` fusionne cet amont avec `codex/gow3-dlss5`
+au commit `2898c88`. La branche DLSS 5 initiale reste à `d8e6b94`.
+Le profil conservé est DLSS 5 NR + MSAA x2, sans réintroduction du mode DLAA natif.
+
+Les trois conflits concernent les membres du rasterizer, la nouvelle séparation
+`DrawWindows`/`Render` de l'overlay et la capture clavier. Les résolutions gardent
+les diagnostics et F7, ajoutent la règle de flou de mouvement de l'amont et
+réinitialisent aussi les requêtes de changement d'arme quand l'overlay capture
+les entrées. Les bancs autonomes reçoivent les services runtime manquants ; le
+test des hooks d'arme utilise les allocations et l'ABI adéquates sous Windows.
+
+Validation du code fusionné :
+
+- Compilation du probe et des bancs : réussie, Clang/MSYS2, deux jobs.
+- 62 contrôles GoW3 CPU/GPU, 19 vérifications natives/SPIR-V et 11 contrôles
+  du contrat ABI de la passerelle de diagnostic NR : réussis.
+- Lanceur Rust : 765 tests de bibliothèque et 407 tests dans 21 suites
+  d'intégration réussis ; `cargo fmt --check` et Clippy avec `-D warnings` passent.
+  Toolchain locale Rust 1.99.1/MSVC ; pas de paquet de distribution créé.
+- Suite Python : 858 cas, 99 ignorés. Après utilisation du probe fraîchement
+  compilé avec ses DLL dans le PATH, 753 réussissent ; cinq échecs et une erreur
+  restent et sont reproduits sur une copie intacte de `f593377`. Ils concernent
+  l'ancien lanceur Python : titre/icône Windows, traductions chinoise et
+  indonésienne, et bit exécutable AppImage sous Windows. La table de parité
+  est complétée avec les tests Rust existants et sept lacunes explicites.
+
+La session réelle `out/gow3-sessions/20261029T122519893526Z` utilise le probe
+fusionné, la copie d'Auto Save Gaia 0:04:35, le silence, la vie infinie et Skip
+Intro. La scène reste en 1920×1080 natif, MSAA x2. F7 ON/OFF, le badge après
+achèvement GPU et la pause/reprise par les trophées F8 sont observés ; au moins
+9 000 évaluations NR se terminent. Huit frames brutes conservent profondeur et
+mouvements, sans reset pendant les captures, avec 99,927–99,945 % des surfaces
+couvertes par l'historique géométrique. L'erreur médiane sur 4 714 correspondances
+indépendantes est de 0,171 pixel ; pour les 338 points d'instances affines,
+0,330 pixel. La reprojection caméra CPU/GPU diffère au maximum de 0,000319 pixel.
+Les mouvements de fallback ne présentent aucune discordance RG16.
+
+Les 2 400 pixels opaques contrôlés des barres de vie/magie sont identiques sur
+les captures ON/OFF de frames différentes. Le jeu sort avec le code 0 et les
+six empreintes des sauvegardes source, backup et runtime restent inchangées.
+Ces contrôles ne certifient pas tout le jeu, tous les réglages graphiques ou les
+zones translucides du HUD. L'ouverture par Insert n'a pas été qualifiée avec
+l'injection clavier de l'outil ; un contrôle au clavier réel reste à faire.
+
+Les journaux et `report.json` sont dans
+`out/verification/integration-20261029/`. Les contrôles GoW3 sont détaillés dans
+`out/gow3-validation/20261029T121526371819Z/result.json` ; les captures et leur
+analyse restent dans la session, hors Git. Les changements préexistants du
+sous-module FSR sont exclus des commits.
 
 ## Provenance vérifiée
 
