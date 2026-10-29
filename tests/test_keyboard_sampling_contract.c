@@ -4,6 +4,11 @@
 #include <assert.h>
 #include <SDL3/SDL.h>
 
+/* The upstream switch-attack path is disabled in this sampler fixture. */
+int runtime_memory_is_mapped(uintptr_t address, uint64_t size) {
+    (void)address; (void)size; assert(!"switch attacks must remain disabled"); return 0;
+}
+
 static bool fixture_keys[SDL_SCANCODE_COUNT];
 static bool fixture_pad_buttons[SDL_GAMEPAD_BUTTON_COUNT];
 static Sint16 fixture_pad_axes[SDL_GAMEPAD_AXIS_COUNT];

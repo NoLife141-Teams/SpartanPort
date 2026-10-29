@@ -9,6 +9,10 @@
 #endif
 #include <utime.h>
 
+int runtime_memory_is_mapped(uintptr_t address, uint64_t size) {
+    (void)address; (void)size; assert(!"switch attacks must remain disabled"); return 0;
+}
+
 int spartanportgpu_overlay_captures_input(void) { return 0; }
 int spartanportgpu_vibration_percent(void) { return 0; }
 void spartanportgpu_engine_fps_cycle(void) {}
