@@ -172,6 +172,15 @@ pub fn environment(
     env.shift_remove(var("update_dir"));
     // Temporal upscaling is parked: a switch saved on earlier has no control left to turn it off.
     env.insert(var("experimental_upscaler").into(), "0".into());
+    // The saved launch choice wins over an inherited diagnostic session.
+    put_switch(&mut env, settings, "dlss5_nr");
+    for key in [
+        "SPARTAN_GOW3_NR_SCENE",
+        "SPARTAN_GOW3_NR_PREVIEW",
+        "SPARTAN_GOW3_NR_DUMP",
+    ] {
+        env.shift_remove(key);
+    }
     let update_dir = settings.get_str("update_dir");
     if !update_dir.is_empty() {
         env.insert(var("update_dir").into(), update_dir.clone());

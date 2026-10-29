@@ -409,6 +409,14 @@ impl<'a> Runner<'a> {
             ));
         };
         let probe_text = python_path(&probe);
+        if let Err(message) =
+            crate::core::nr::configure(&mut self.env, &graphics.options, &probe, cfg!(windows))
+        {
+            return self.fail(&message);
+        }
+        if self.get("SPARTAN_DLSS5_NR") == Some("1") {
+            self.say("DLSS 5 NR: native 1920x1080 + MSAA x2, SDR, starts ON. F7 toggles NR; Shift+F7 toggles its badge.");
+        }
         // Development builds run from the MSYS2 tree: its CLANG64 DLLs (SDL3, FFmpeg, ...).
         if cfg!(windows) && !probe.with_file_name("SDL3.dll").is_file() {
             let clang64 = plan.msys2_root.join("clang64").join("bin");

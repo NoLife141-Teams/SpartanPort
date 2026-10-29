@@ -18,6 +18,7 @@ pub mod launch;
 pub mod legacy;
 pub mod log;
 pub mod mods;
+pub mod nr;
 pub mod options;
 pub mod patches;
 pub mod paths;

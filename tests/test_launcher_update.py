@@ -44,7 +44,9 @@ class ReplaceAppImageTest(unittest.TestCase):
         self.publish_checksum()
         self.replace()
         self.assertEqual(self.target.read_bytes(), NEW_APPIMAGE)
-        self.assertTrue(self.target.stat().st_mode & 0o111)
+        # Windows chmod/stat only expose the read-only bit, not POSIX execute permissions.
+        if sys.platform != 'win32':
+            self.assertTrue(self.target.stat().st_mode & 0o111)
         self.assertEqual(self.leftovers(), ['spartanport.AppImage'])
 
     def test_a_symlink_to_the_appimage_replaces_the_file_behind_it(self):

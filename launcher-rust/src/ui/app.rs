@@ -574,6 +574,23 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 /// (`follow`).
 pub fn apply_set(state: &mut State, key: &str, value: Value) -> Task<Message> {
     if state.store.set(key, value) {
+        if key == "dlss5_nr" && state.store.flag("dlss5_nr") {
+            state
+                .store
+                .set("render_resolution", Value::String("native".into()));
+            state.store.set("hdr", Value::Bool(false));
+            state.store.set("no_msaa", Value::String("0".into()));
+            return follow(
+                state,
+                Cause::Keys(&[key, "render_resolution", "hdr", "no_msaa"]),
+            );
+        } else if state.store.flag("dlss5_nr")
+            && ((key == "render_resolution" && state.store.text(key) != "native")
+                || (key == "hdr" && state.store.flag(key))
+                || (key == "no_msaa" && state.store.text(key) == "1"))
+        {
+            state.store.set("dlss5_nr", Value::Bool(false));
+        }
         return follow(state, Cause::Keys(&[key]));
     }
     Task::none()

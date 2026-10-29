@@ -145,6 +145,17 @@ class NativeDarkTitlebarWindowsTest(unittest.TestCase):
 
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
+        # GDI handles are pointer-sized on 64-bit Windows.
+        user32.GetWindowDC.argtypes, user32.GetWindowDC.restype = (wt.HWND,), wt.HDC
+        user32.PrintWindow.argtypes = (wt.HWND, wt.HDC, wt.UINT)
+        gdi32.CreateCompatibleDC.argtypes, gdi32.CreateCompatibleDC.restype = (wt.HDC,), wt.HDC
+        gdi32.CreateCompatibleBitmap.argtypes = (wt.HDC, ctypes.c_int, ctypes.c_int)
+        gdi32.CreateCompatibleBitmap.restype = wt.HBITMAP
+        gdi32.SelectObject.argtypes, gdi32.SelectObject.restype = (wt.HDC, wt.HANDLE), wt.HANDLE
+        gdi32.GetDIBits.argtypes = (wt.HDC, wt.HBITMAP, wt.UINT, wt.UINT, ctypes.c_void_p, ctypes.c_void_p, wt.UINT)
+        gdi32.DeleteObject.argtypes = (wt.HANDLE,)
+        gdi32.DeleteDC.argtypes = (wt.HDC,)
+        user32.ReleaseDC.argtypes = (wt.HWND, wt.HDC)
         hwnd = launcher.toplevel_hwnd(self.root)
 
         rect = wt.RECT()
@@ -155,8 +166,10 @@ class NativeDarkTitlebarWindowsTest(unittest.TestCase):
         hwnd_dc = user32.GetWindowDC(hwnd)
         mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
         bitmap = gdi32.CreateCompatibleBitmap(hwnd_dc, w, h)
-        gdi32.SelectObject(mem_dc, bitmap)
-        user32.PrintWindow(hwnd, mem_dc, 2)  # PW_RENDERFULLCONTENT
+        original = gdi32.SelectObject(mem_dc, bitmap)
+        printed = user32.PrintWindow(hwnd, mem_dc, 2)  # PW_RENDERFULLCONTENT
+        # GetDIBits requires the bitmap to be deselected from the DC.
+        gdi32.SelectObject(mem_dc, original)
 
         class BITMAPINFOHEADER(ctypes.Structure):
             _pack_ = 1
@@ -174,23 +187,21 @@ class NativeDarkTitlebarWindowsTest(unittest.TestCase):
         bmi.biCompression = 0
         data_size = w * 4 * h
         buffer = (ctypes.c_char * data_size)()
-        gdi32.GetDIBits(mem_dc, bitmap, 0, h, buffer, ctypes.byref(bmi), 0)
-
-        # Title bar pixel near center top
-        x, y = w // 2, 15
-        idx = (y * w + x) * 4
-        b = buffer[idx] if isinstance(buffer[idx], int) else ord(buffer[idx])
-        g = buffer[idx + 1] if isinstance(buffer[idx + 1], int) else ord(buffer[idx + 1])
-        r = buffer[idx + 2] if isinstance(buffer[idx + 2], int) else ord(buffer[idx + 2])
+        rows = gdi32.GetDIBits(mem_dc, bitmap, 0, h, buffer, ctypes.byref(bmi), 0)
 
         gdi32.DeleteObject(bitmap)
         gdi32.DeleteDC(mem_dc)
         user32.ReleaseDC(hwnd, hwnd_dc)
-
-        # On dark title bar, background is dark (R,G,B all <= 30), not default light gray (> 220)
-        self.assertLess(r, 40, f'Expected dark titlebar red component, got {r}')
-        self.assertLess(g, 40, f'Expected dark titlebar green component, got {g}')
-        self.assertLess(b, 40, f'Expected dark titlebar blue component, got {b}')
+        self.assertTrue(printed, 'PrintWindow failed')
+        self.assertEqual(rows, h, 'GetDIBits did not return the whole window')
+        # The center pixel may lie on an antialiased title glyph. The median of a
+        # caption region (away from the icon and buttons) measures its background.
+        from statistics import median
+        pixels = bytes(buffer)
+        for channel in range(3):
+            background = median(pixels[(y * w + x) * 4 + channel]
+                                for y in range(8, 23) for x in range(40, w - 145))
+            self.assertLess(background, 40, f'Expected dark caption background, channel {channel}: {background}')
 
     def test_window_icon_applies_dark_titlebar(self):
         self.root.update_idletasks()

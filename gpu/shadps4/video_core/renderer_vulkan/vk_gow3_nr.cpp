@@ -170,7 +170,10 @@ Gow3Nr::Gow3Nr(const Instance& i,Scheduler& s):impl(std::make_unique<Impl>(i,s))
         const std::filesystem::path path(value);
         if(path.is_absolute()&&std::filesystem::is_directory(path)&&std::filesystem::is_empty(path)) impl->dump_directory=path;
     }
-    impl->enabled=true;impl->active=false;ui.guided=true;
+    const char* start=std::getenv("SPARTAN_DLSS5_NR");
+    impl->enabled=true;impl->active=start&&std::strcmp(start,"1")==0;ui.guided=true;
+    ui.state=impl->active?Gow3::NrState::Waiting:Gow3::NrState::Off;
+    std::printf("GoW3 NR scene: startup %s\n",impl->active?"ON":"OFF");
     std::puts("GoW3 NR scene: verified pre-HUD scene, real depth/object+camera motion, unjittered; F7 toggles");
 }
 Gow3Nr::~Gow3Nr() {

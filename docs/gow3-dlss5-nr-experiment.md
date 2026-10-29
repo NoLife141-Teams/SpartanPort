@@ -34,7 +34,7 @@ réinitialisent aussi les requêtes de changement d'arme quand l'overlay capture
 les entrées. Les bancs autonomes reçoivent les services runtime manquants ; le
 test des hooks d'arme utilise les allocations et l'ABI adéquates sous Windows.
 
-Validation du code fusionné :
+Validation initiale du code fusionné (avant les corrections décrites ci-dessous) :
 
 - Compilation du probe et des bancs : réussie, Clang/MSYS2, deux jobs.
 - 62 contrôles GoW3 CPU/GPU, 19 vérifications natives/SPIR-V et 11 contrôles
@@ -72,6 +72,56 @@ Les journaux et `report.json` sont dans
 `out/gow3-validation/20261029T121526371819Z/result.json` ; les captures et leur
 analyse restent dans la session, hors Git. Les changements préexistants du
 sous-module FSR sont exclus des commits.
+
+## Lanceur et badge persistants
+
+Le lanceur Rust propose maintenant **Graphismes > DLSS 5 + MSAA x2 (1080p)**.
+Cette option, enregistrée sous `dlss5_nr` dans `settings.json`, démarre NR actif.
+Elle sélectionne le rendu natif 1920×1080, MSAA x2 et SDR. Choisir ensuite une
+autre résolution, HDR ou désactiver MSAA dans le lanceur désélectionne ce profil.
+Le runner refuse un profil incompatible ou des DLL absentes avant de lancer le
+jeu. Le mode DLAA natif GoW3 reste retiré.
+
+- **F7** active/désactive NR pour la session ; MSAA x2 reste actif.
+- **Maj+F7** affiche/masque uniquement le badge. Sa visibilité est enregistrée
+  dans `spartanport.ini` (`show_nr_badge=1` par défaut).
+- La même préférence existe dans **Graphismes > Afficher le badge DLSS 5** du
+  lanceur et dans l'onglet Overlay du menu en jeu.
+- Le choix de démarrage DLSS 5 reste indépendant du badge et des changements
+  temporaires effectués avec F7.
+
+La passerelle `spartanport_dlssnr.dll` et le runtime NVIDIA `nvngx_dlssnr.dll`
+doivent être placés à côté de **spartanport-probe.exe** : `out/` dans ce checkout,
+`bin/` dans un paquet Windows. Ils ne sont pas ajoutés à Git. Le lancement normal
+ne crée pas de captures brutes NR et ne demande pas le script de diagnostic.
+
+La session `out/gow3-sessions/20261029T131628753487Z` a été lancée depuis le bouton
+Jouer du lanceur Rust, avec une copie de la sauvegarde Gaia 0:04:35, sans son,
+vie infinie et **Skip Intro enregistré et confirmé dans les patches appliqués**.
+Le compteur GPU passe de 2 760 évaluations avant masquage à 3 600 avec le badge
+masqué, sans reset provoqué par le masquage. F7 coupe réellement NR alors que le
+badge reste caché (`active=0`), puis le réactive : 6 360 évaluations sont atteintes
+avant réaffichage du badge actif. Le HUD reste composé après NR. Après sortie,
+les six empreintes des sauvegardes source, backup et runtime sont inchangées.
+Les preuves de cet essai sont dans `out/verification/nr-launcher-20261029/`.
+
+Les six problèmes Python hérités sont corrigés : isolation du mock de l'icône,
+capture GDI avec handles 64 bits et mesure du fond de la barre de titre plutôt
+qu'un pixel de texte, traductions chinoises/indonésiennes manquantes, et assertion
+du bit exécutable AppImage limitée aux systèmes POSIX. La régénération des tables
+Rust conserve aussi les traductions audio/effets déjà présentes. Les références
+visuelles de la page Graphismes intègrent les deux nouveaux contrôles.
+
+Validation finale du 29 octobre : **1 175 tests Rust réussis** (766 bibliothèque,
+409 intégration), dont les comparaisons visuelles à deux tailles et trois langues ;
+`cargo fmt --check` et Clippy `-D warnings` passent. La suite Python termine ses
+858 cas sans échec ni erreur (99 ignorés). Les 62 contrôles GoW3 CPU/GPU et le
+banc natif de persistance graphique passent également. Après fermeture et
+réouverture du lanceur, DLSS 5 reste sélectionné et le badge masqué ; sa visibilité
+a ensuite été réactivée et enregistrée pour les prochains essais.
+
+Ces résultats valident ce profil et la sauvegarde testée, pas tous les chapitres,
+HDR ou les résolutions supérieures. Aucun paquet de distribution n'est publié.
 
 ## Provenance vérifiée
 

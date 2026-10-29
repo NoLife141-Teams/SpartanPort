@@ -177,7 +177,11 @@ fn collect_matches_python_for_edited_case() {
         let want = if name == "settings.json" {
             expected_settings("collected", &input)
         } else {
-            String::from_utf8(fs::read(expected.join(name)).unwrap()).unwrap()
+            // The Rust DLSS 5 extension adds one independent, visible-by-default badge control.
+            format!(
+                "{}show_nr_badge=1\n",
+                String::from_utf8(fs::read(expected.join(name)).unwrap()).unwrap()
+            )
         };
         assert_eq!(got, want, "{name}");
     }
@@ -239,6 +243,7 @@ fn assert_environment_matches(case: &str) {
         &fs::read_to_string(fixture_dir(case).join("environment.json")).unwrap(),
     )
     .unwrap();
+    expected.insert("SPARTAN_DLSS5_NR".into(), "0".into());
     for decided in decided_defaults(&load_input(case)) {
         if let Some((name, python, rust)) = decided.env {
             assert_eq!(

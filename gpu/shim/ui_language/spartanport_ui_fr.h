@@ -142,6 +142,8 @@ inline constexpr std::pair<std::string_view, const char*> FrenchText[] = {
     {"Sharpens the final image.", "Rend l'image finale plus nette."},
     {"Sharper floors and walls seen at an angle. Little cost on most GPUs.", "Sols et murs vus en biais plus nets. Peu coûteux sur la plupart des GPU."},
     {"Show overlay", "Afficher la surcouche"},
+    {"Show DLSS 5 status badge", "Afficher le badge DLSS 5"},
+    {"Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working.", "Maj+F7 affiche ou masque le badge en jeu. DLSS 5 et F7 restent actifs quand il est masqué."},
     {"Size of the overlay text.", "Taille du texte de la surcouche."},
     {"Strength of the controller's vibration. 0% turns it off.", "Force de la vibration de la manette. 0 % la désactive."},
     {"Textures (applied on restart)", "Textures (appliqué au redémarrage)"},

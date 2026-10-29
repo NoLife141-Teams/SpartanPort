@@ -632,6 +632,8 @@ void OverlayTab() {
     auto& s = SpartanSettings::Get();
     if (BeginRows("##overlay_on")) {
         CheckRow("Show overlay", s.show_fps, "The performance overlay in a corner of the screen.");
+        CheckRow("Show DLSS 5 status badge", s.show_nr_badge,
+                 "Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working.");
         ImGui::EndTable();
     }
     ImGui::BeginDisabled(!s.show_fps);
@@ -2548,6 +2550,17 @@ bool HandleEvent(const SDL_Event& event) {
             return true;
         }
         if(event.key.key==SDLK_F7 && !is_open && !text_entry_active &&
+           (event.key.mod & SDL_KMOD_SHIFT) && Vulkan::Gow3::NeuralPreviewControl().visible.load()) {
+            SDL_Window* focus=SDL_GetKeyboardFocus();
+            if(down && !event.key.repeat && focus && SDL_GetWindowID(focus)==event.key.windowID) {
+                auto& settings=SpartanSettings::Get();
+                settings.show_nr_badge=!settings.show_nr_badge.load();
+                SpartanSettings::Save();
+                std::printf("GoW3 NR badge: %s (DLSS state unchanged)\n",settings.show_nr_badge?"visible":"hidden");
+            }
+            return true;
+        }
+        if(event.key.key==SDLK_F7 && !is_open && !text_entry_active &&
            Vulkan::Gow3::NeuralPreviewControl().available.load()) {
             SDL_Window* focus=SDL_GetKeyboardFocus();
             if(down && !event.key.repeat && focus && SDL_GetWindowID(focus)==event.key.windowID)
@@ -2718,7 +2731,7 @@ bool Visible() {
                            menu_open || text_entry_active || choice_active || choice_retiring ||
                            toast_active || SpartanToast::Busy() || trophy_view || s.show_fps || NoticeActive() ||
                            (s.actor_watch_supported && s.enemy_health_bar) ||
-                           Vulkan::Gow3::NeuralPreviewControl().visible.load());
+                           (s.show_nr_badge && Vulkan::Gow3::NeuralPreviewControl().visible.load()));
 }
 
 bool CapturesInput() {
@@ -2766,7 +2779,7 @@ void SetTextEntry(bool active, const std::string& prompt, const std::string& tex
 
 // Every window of a frame, between NewFrame and Render (Render; also tools/overlay_preview.cpp).
 void DrawWindows() {
-    if(Vulkan::Gow3::NeuralPreviewControl().visible.load() && !loading && !menu_open) {
+    if(SpartanSettings::Get().show_nr_badge && Vulkan::Gow3::NeuralPreviewControl().visible.load() && !loading && !menu_open) {
         using Vulkan::Gow3::NrState;
         auto& nr=Vulkan::Gow3::NeuralPreviewControl();
         const auto state=nr.state.load();

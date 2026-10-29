@@ -47,8 +47,10 @@ class LauncherArtworkTest(unittest.TestCase):
     def test_window_icon_is_the_ports_own_whatever_the_dump(self):
         (self.update / 'sce_sys/icon0.png').write_bytes(b'updated icon')
         app = self.app()
-        with mock.patch.object(launcher, 'window_icon') as icon:
+        with mock.patch.object(launcher, 'window_icon') as icon, \
+             mock.patch.object(app, 'apply_dark_titlebar') as titlebar:
             app.set_icon()
+        titlebar.assert_called_once()
         self.assertEqual(icon.call_args.args[2:], (launcher.PORT_DIR / 'launcher' / 'spartanport.ico',
                                                    launcher.PORT_DIR / 'launcher' / 'spartanport.png'))
 

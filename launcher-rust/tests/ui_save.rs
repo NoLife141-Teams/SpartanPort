@@ -924,3 +924,27 @@ fn audio_and_effects_options_are_saved_and_read_back() {
     assert!(!reopened.store.flag("depth_of_field"));
     assert!(!dirty(&reopened));
 }
+
+#[test]
+fn dlss5_profile_and_hidden_badge_survive_reopening_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state_in(dir.path());
+    assert!(!state.store.flag("dlss5_nr"));
+    assert!(state.store.flag("show_nr_badge"));
+    set(&mut state, "render_resolution", json!("4K"));
+    set(&mut state, "hdr", json!(true));
+    set(&mut state, "no_msaa", json!("1"));
+    set(&mut state, "dlss5_nr", json!(true));
+    assert_eq!(state.store.text("render_resolution"), "native");
+    assert!(!state.store.flag("hdr"));
+    assert_eq!(state.store.text("no_msaa"), "0");
+    set(&mut state, "show_nr_badge", json!(false));
+    save(&mut state);
+    let mut reopened = state_in(dir.path());
+    assert!(reopened.store.flag("dlss5_nr"));
+    assert!(!reopened.store.flag("show_nr_badge"));
+    assert_eq!(reopened.store.text("render_resolution"), "native");
+    set(&mut reopened, "render_resolution", json!("4K"));
+    assert!(!reopened.store.flag("dlss5_nr"));
+    assert!(!reopened.store.flag("show_nr_badge"));
+}

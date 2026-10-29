@@ -3,6 +3,7 @@
 //! Ruling R35: like Python 2.6.0, the Experimental and Upscaling sections (`experimental_upscaler`,
 //! `upscaler`, `preset`, `output_res`, `live_resolution`, `object_motion`) stay parked until the
 //! image quality of temporal upscaling is validated, so this page does not show them.
+//! GoW3 Neural Rendering has its own validated native 1080p + MSAA x2 profile.
 
 use iced::widget::{button, column, text};
 use iced::Element;
@@ -84,6 +85,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
             state.store.flag("hdr"),
             Some(&hint("When HDR is on in Windows and the display supports it.")),
         ),
+        section(state.rtl, "DLSS 5"),
+        checkbox(
+            state.rtl,
+            "dlss5_nr",
+            &tr(lang, "DLSS 5 + MSAA x2 (1080p)"),
+            state.store.flag("dlss5_nr"),
+            Some(&hint("Starts enabled. F7 toggles DLSS 5 in game. Selects native 1080p, MSAA x2 and SDR; requires the NVIDIA NR runtime beside the game executable.")),
+        ),
         section(state.rtl, &tr(lang, "Effects")),
         checkbox(
             state.rtl,
@@ -113,6 +122,13 @@ pub fn view(state: &State) -> Element<'_, Message> {
             )),
         ),
         section(state.rtl, &tr(lang, "Overlay")),
+        checkbox(
+            state.rtl,
+            "show_nr_badge",
+            &tr(lang, "Show DLSS 5 status badge"),
+            state.store.flag("show_nr_badge"),
+            Some(&hint("Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working.")),
+        ),
         checkbox(
             state.rtl,
             "show_fps",

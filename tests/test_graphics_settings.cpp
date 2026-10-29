@@ -93,6 +93,17 @@ int main() {
     SetEnvironment("SPARTAN_ASYNC_SHADERS", "");
     auto& v = SpartanSettings::Get();
     SpartanSettings::Load();
+    assert(v.show_nr_badge); // New installations show the diagnostic status.
+    v.show_nr_badge = false;
+    SpartanSettings::Save();
+    assert(Read(path).find("show_nr_badge=0\n") != std::string::npos);
+    v.show_nr_badge = true;
+    SpartanSettings::Load();
+    assert(!v.show_nr_badge); // Visibility survives the next launch.
+    SetEnvironment("SPARTAN_SHOW_NR_BADGE", "1");
+    SpartanSettings::Load();
+    assert(v.show_nr_badge);
+    SetEnvironment("SPARTAN_SHOW_NR_BADGE", "");
     assert(v.display_mode == G::Borderless && !v.vsync && v.fps_limit == 240 && !v.async_shaders);
     assert(v.render_resolution == 4 && v.engine_fps == 240 && !v.deferred_readback && v.stale_readback);
     // FSR 1 left the menus in 2.2.0: a saved fsr1=1 (or SPARTAN_FSR1) no longer turns it on.
