@@ -6,17 +6,16 @@
 #include <memory>
 namespace Vulkan {
 class Instance; class Scheduler;
-// Native GoW3 scene hook (DLAA or opt-in guided NR). Owns NGX inputs/output, never rewrites guest
+// Native GoW3 scene hook (opt-in guided NR). Owns NGX inputs/output, never rewrites guest
 // images. The game's following composition and UI passes consume a replacement
 // single- or two-sample view with the original sampled color/alpha semantics.
-class Gow3Dlaa {
+class Gow3Nr {
 public:
-    Gow3Dlaa(const Instance&,Scheduler&);
-    ~Gow3Dlaa();
+    Gow3Nr(const Instance&,Scheduler&);
+    ~Gow3Nr();
     bool Enabled() const;
     bool Active();
     void Observe(u64 shader,u32 slot,const void* bytes,size_t size,u64 depth,u32 w,u32 h);
-    std::array<float,2> Jitter() const;
     u64 Depth() const;
     bool OnFlip();
     // Called exactly at the known composition; closes the scene-camera epoch,

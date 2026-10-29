@@ -9,6 +9,21 @@ transformation et testées avec de nouvelles captures. Le profil `--nr-scene`
 conserve désormais MSAA x2, à la demande de l'utilisateur. Voir
 [le correctif et le bilan visuel](gow3-nr-gaia-vegetation-1080p.md).
 
+Sur la branche `codex/gow3-dlss5`, le mode DLAA natif GoW3, F10/Maj+F10,
+le curseur de netteté et les anciens profils de lancement ont été retirés.
+Le hook dédié `vk_gow3_nr.cpp` conserve les guides, le pré-HUD et F7.
+Les rapports DLAA antérieurs sont conservés comme historique.
+
+Le nettoyage du mode DLAA compile et les 62 contrôles CPU/GPU passent dans
+`out/gow3-validation/20261029T003948321461Z/result.json`. Les 11 tests de
+passerelle NR passent. Le dernier lancement après ce nettoyage n'a pas atteint
+Gaia : Windows a refusé la réservation de 8 128 MiB de mémoire invitée
+(erreur 1450). Cette session `20261029T004009313974Z` ne valide donc pas le
+rendu live du hook renommé ; ses sauvegardes source/backup/runtime sont
+inchangées. Les captures Gaia/MSAA x2 décrites plus bas précèdent le nettoyage.
+Le changement est conservé comme expérimentation locale ; refaire ce smoke
+test lorsque la réservation mémoire du jeu redevient possible.
+
 ## Provenance vérifiée
 
 Le [manifeste officiel RTX Remix](https://github.com/NVIDIAGameWorks/dxvk-remix/blob/main/packman-external.xml)
@@ -68,7 +83,7 @@ avant la destruction du device Vulkan.
 
 **F7** active/désactive NR. La session commence OFF. Le badge `NR ACTIF`
 n'apparaît qu'après une évaluation terminée sur GPU et précise
-`profondeur + mouvements | HUD après NR`. F10 conserve son rôle en session DLAA.
+`profondeur + mouvements | HUD après NR`. F10 et les réglages DLAA ne sont plus proposés dans le jeu.
 Le mode historique `--nr-preview` reste disponible séparément : il traite
 l'image finale, HUD compris, sans guides et avec reset à chaque image.
 Ce mode historique n'est pas celui utilisé pour les validations ci-dessous.

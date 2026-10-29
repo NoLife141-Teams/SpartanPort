@@ -26,19 +26,15 @@ def hashes(directory):
     return result
 
 
-def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolution='native', fullscreen=False, aa=None, display_capture=False, nr_preview=False, nr_scene=False):
+def prepare(seed, game, probe, pixels=False, motion=False, resolution='native', fullscreen=False, nr_preview=False, nr_scene=False):
     if nr_scene:
         if nr_preview: raise ValueError('Choose --nr-scene or --nr-preview')
         if resolution!='native': raise ValueError('--nr-scene currently validates native 1080p only')
         nr_preview=True
-    if nr_preview and (dlaa or aa is not None or pixels or motion or display_capture):
-        raise ValueError('--nr-preview is an isolated presentation experiment; do not combine with DLAA/AA/pixel/motion modes')
+    if nr_preview and (pixels or motion):
+        raise ValueError('NR is an isolated experiment; do not combine with pixel/motion collection profiles')
     if motion and not pixels:
         raise ValueError('--motion requires --pixels')
-    if aa is not None:
-        dlaa=True  # Shared, read-only capture hook also records both DLAA-off baselines.
-    if display_capture and aa is None:
-        raise ValueError('--display-capture requires an explicit --aa mode')
     seed, game, probe = seed.resolve(), game.resolve(), probe.resolve()
     if not (game / 'eboot.bin').is_file() or not probe.is_file():
         raise ValueError('Game eboot.bin or validated probe is missing')
@@ -107,11 +103,6 @@ def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolutio
         (session / 'pixels').mkdir()
         variables.update(SPARTAN_GOW3_PIXELS='1', SPARTAN_GOW3_PIXEL_DIR=str(session / 'pixels'))
     if fullscreen and resolution=='1440p': variables['SPARTAN_FULLSCREEN_SIZE']='2560x1440'
-    if aa is not None:
-        variables.update(SPARTAN_NO_MSAA='0' if aa=='msaa2' else '1', SPARTAN_GOW3_AA_CAPTURE_SCENE='240')
-    if display_capture:
-        (session/'display-capture').mkdir()
-        variables.update(SPARTAN_GOW3_DISPLAY_CAPTURE=str(session/'display-capture'),SPARTAN_GPU_PROFILE='1')
     if motion:
         variables['SPARTAN_GOW3_MOTION']='1'
     dlss_files={}
@@ -130,25 +121,12 @@ def prepare(seed, game, probe, pixels=False, motion=False, dlaa=False, resolutio
         if nr_scene:
             variables['SPARTAN_GOW3_NR_SCENE']='1'
             variables['SPARTAN_NO_MSAA']='0'  # NR follows the game's MSAA x2 resolve.
-    if dlaa:
-        libraries={
-            'spartanport_dlss.dll': ROOT/'out/verification/dlss-bridge/Release/spartanport_dlss.dll',
-            'nvngx_dlss.dll': ROOT/'out/dependencies/nvidia-dlss/lib/Windows_x86_64/rel/nvngx_dlss.dll',
-        }
-        for name,source in libraries.items():
-            shutil.copy2(source,session/'bin'/name)
-            dlss_files[name]=hashlib.sha256((session/'bin'/name).read_bytes()).hexdigest()
-        (session/'dlaa.switch').write_text('on\n' if aa=='dlaa' else 'off\n',encoding='ascii')
-        (session/'dlss-capture').mkdir()
-        variables.update(SPARTAN_DLSS='1',SPARTAN_GOW3_DLAA='1',
-                         SPARTAN_GOW3_DLAA_SWITCH=str(session/'dlaa.switch'),
-                         SPARTAN_GOW3_DLAA_DUMP=str(session/'dlss-capture'))
     manifest = dict(schema='gow3-supervised-session-v1', session=str(session),
                     prepared_utc=datetime.now(timezone.utc).isoformat(),
                     source_seed=str(seed), save_hashes=before, backup_verified=True,
                     source_probe=str(source_probe), probe=str(probe), probe_sha256=probe_hash,
                     environment=variables, cheats=dict(health=True),
-                    skip_intro_requested=True, save_load_confirmed=False,dlss_files=dlss_files,aa_mode=aa,nr_preview=nr_preview,nr_scene=nr_scene,nr_msaa2=nr_scene)
+                    skip_intro_requested=True, save_load_confirmed=False,dlss_files=dlss_files,aa_mode="msaa2" if nr_scene else None,nr_preview=nr_preview,nr_scene=nr_scene,nr_msaa2=nr_scene)
     (session / 'session.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     return session, manifest
 
@@ -161,16 +139,13 @@ def main():
     parser.add_argument('--launch', action='store_true')
     parser.add_argument('--wait', action='store_true', help='Keep the launcher alive until the isolated game exits')
     parser.add_argument('--pixels', action='store_true', help='Extract two real MSAA color/depth intervals with the first metadata trigger')
-    parser.add_argument('--motion', action='store_true', help='Opt-in GoW3 GPU vertex-history diagnostic; DLAA stays off')
-    parser.add_argument('--dlaa', action='store_true', help='Native GoW3 DLAA experiment; starts off, toggle with F10 or session/dlaa.switch')
+    parser.add_argument('--motion', action='store_true', help='Opt-in GoW3 GPU vertex-history diagnostic without NR')
     parser.add_argument('--resolution',choices=['native','1440p','4K'],default='native')
     parser.add_argument('--fullscreen',action='store_true')
-    parser.add_argument('--aa',choices=['none','msaa2','dlaa'],help='Isolated AA comparison, sharpening off; automatic GPU capture at scene 240')
-    parser.add_argument('--display-capture',action='store_true',help='Capture 16 actual SDR 1080p swapchain images after downsampling, before port overlay; GPU profiling on')
-    parser.add_argument('--nr-preview',action='store_true',help='NR 310.9.16 final-image experiment; F7 toggle, HUD included, no temporal guides; excludes DLAA')
-    parser.add_argument('--nr-scene',action='store_true',help='NR + MSAA x2 native 1080p before HUD, real depth/camera+object motion; F7 toggle; excludes DLAA')
+    parser.add_argument('--nr-preview',action='store_true',help='NR 310.9.16 final-image experiment; F7 toggle, HUD included, no temporal guides')
+    parser.add_argument('--nr-scene',action='store_true',help='NR + MSAA x2 native 1080p before HUD, real depth/camera+object motion; F7 toggle')
     args = parser.parse_args()
-    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, args.pixels, args.motion,args.dlaa,args.resolution,args.fullscreen,args.aa,args.display_capture,args.nr_preview,args.nr_scene)
+    session, manifest = prepare(args.seed_data, args.game_dir, args.probe, pixels=args.pixels,motion=args.motion,resolution=args.resolution,fullscreen=args.fullscreen,nr_preview=args.nr_preview,nr_scene=args.nr_scene)
     if args.launch:
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(('SPARTAN_', 'GOW3_'))}
         env.update(manifest['environment'])

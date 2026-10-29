@@ -19,7 +19,6 @@
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_warmup_inbox.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
-#include "video_core/renderer_vulkan/gow3_dlaa_control.h"
 #include "video_core/renderer_vulkan/vk_nr_preview.h"
 #include "video_core/texture_cache/image.h"
 
@@ -292,60 +291,6 @@ void CaptureScreenshot(const Instance& instance, Scheduler& scheduler, vk::Comma
             LOG_ERROR(Render_Vulkan, "Screenshot: cannot write {}", Common::FS::PathToUTF8String(path));
             SpartanOverlay::ShowNotice("Screenshot failed: cannot write the file");
         }
-    });
-}
-
-// Bounded opt-in diagnostic of the actual display pixels. Unlike F12's internal
-// frame capture this reads the acquired swapchain image after its normal blit.
-// Raw bytes avoid PNG compression on the presentation scheduler's completion path.
-void CaptureGow3Display(const Instance& instance,Scheduler& scheduler,vk::CommandBuffer cmd,
-                       vk::Image image,vk::Extent2D extent,vk::Format format,const Frame& source,
-                       bool unique_game_frame) {
-    static const std::filesystem::path directory=[] {
-        const char* value=std::getenv("SPARTAN_GOW3_DISPLAY_CAPTURE");
-        const std::filesystem::path path=value?value:"";
-        return path.is_absolute()&&std::filesystem::is_directory(path)&&std::filesystem::is_empty(path)?path:std::filesystem::path{};
-    }();
-    static u32 eligible=0,count=0;
-    if(directory.empty()||count==16||!unique_game_frame||!Gow3::NativeDlaaControl().comparison_ready.load()) return;
-    if(extent.width!=1920||extent.height!=1080||source.is_hdr||
-       (format!=vk::Format::eB8G8R8A8Srgb&&format!=vk::Format::eB8G8R8A8Unorm&&
-        format!=vk::Format::eR8G8B8A8Srgb&&format!=vk::Format::eR8G8B8A8Unorm)) return;
-    if(eligible++%4) return;
-    const auto bytes=u64(extent.width)*extent.height*4;
-    auto buffer=std::make_shared<VideoCore::Buffer>(instance,0,bytes,VideoCore::MemoryType::HostCached,"GoW3 display proof");
-    const vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor,0,1,0,1};
-    const auto transition=[&](vk::ImageLayout from,vk::ImageLayout to,vk::AccessFlags src,vk::AccessFlags dst) {
-        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,vk::PipelineStageFlagBits::eTransfer,{}, {}, {},
-            vk::ImageMemoryBarrier{.srcAccessMask=src,.dstAccessMask=dst,.oldLayout=from,.newLayout=to,
-                .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
-                .image=image,.subresourceRange=range});
-    };
-    transition(vk::ImageLayout::eTransferDstOptimal,vk::ImageLayout::eTransferSrcOptimal,
-        vk::AccessFlagBits::eTransferWrite,vk::AccessFlagBits::eTransferRead);
-    cmd.copyImageToBuffer(image,vk::ImageLayout::eTransferSrcOptimal,buffer->Handle(),
-        vk::BufferImageCopy{.imageSubresource={vk::ImageAspectFlagBits::eColor,0,0,1},.imageExtent={extent.width,extent.height,1}});
-    const vk::MemoryBarrier host{.srcAccessMask=vk::AccessFlagBits::eTransferWrite,.dstAccessMask=vk::AccessFlagBits::eHostRead};
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,vk::PipelineStageFlagBits::eHost,{},host,{},{});
-    transition(vk::ImageLayout::eTransferSrcOptimal,vk::ImageLayout::eTransferDstOptimal,
-        vk::AccessFlagBits::eTransferRead,vk::AccessFlagBits::eTransferWrite);
-    const auto tick=scheduler.CurrentTick();
-    const auto index=count++,ordinal=eligible;
-    const auto time=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    const bool dlaa=Gow3::NativeDlaaControl().state.load()==Gow3::DlaaState::Active;
-    scheduler.DeferOperation([buffer,bytes,index,ordinal,tick,time,dlaa,format,w=source.width,h=source.height] {
-        buffer->Invalidate(0,bytes);
-        const auto stem=directory/std::to_string(index);
-        auto* raw=std::fopen((stem.string()+".raw").c_str(),"wbx");
-        bool ok=false;
-        if(raw) {const bool written=std::fwrite(buffer->mapped_data.data(),1,bytes,raw)==bytes;ok=std::fclose(raw)==0&&written;}
-        auto* meta=std::fopen((stem.string()+".json").c_str(),"wbx");
-        if(meta) {
-            std::fprintf(meta,"{\"complete\":%s,\"gpu_complete\":true,\"index\":%u,\"presentation_ordinal\":%u,\"tick\":%llu,\"recorded_ms\":%.6f,\"width\":1920,\"height\":1080,\"source_width\":%u,\"source_height\":%u,\"format\":\"%s\",\"dlaa_state_at_record\":%s,\"stage\":\"actual swapchain after normal linear blit, before port overlay\"}\n",
-                ok?"true":"false",index,ordinal,(unsigned long long)tick,time,w,h,vk::to_string(format).c_str(),dlaa?"true":"false");
-            std::fclose(meta);
-        }
-        std::printf("GoW3 display: index=%u gpu-complete=%u internal=%ux%u display=1920x1080 dlaa=%u\n",index,ok,w,h,dlaa);
     });
 }
 
@@ -1015,8 +960,6 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
                          MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height),
                          vk::Filter::eLinear);
         if (is_game_frame) nr_preview->Apply(scheduler, cmdbuf, *frame, swapchain_image, extent);
-        CaptureGow3Display(instance,scheduler,cmdbuf,swapchain_image,extent,swapchain.GetSurfaceFormat().format,
-                          *frame,is_game_frame&&!is_reusing_frame);
         if (VideoCore::ConsumeGameOnlyScreenshotRequests() != 0) {
             CaptureScreenshot(instance, scheduler, cmdbuf, *frame);
         }

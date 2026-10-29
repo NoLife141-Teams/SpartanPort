@@ -1,5 +1,9 @@
 # DLAA natif GoW3 : essai réel sur Gaia
 
+> Historique : le mode DLAA natif GoW3 a été retiré sur `codex/gow3-dlss5`.
+> Le profil actuel utilise [DLSS 5 NR + MSAA x2](gow3-dlss5-nr-experiment.md).
+> Les commandes DLAA ci-dessous documentent les anciens essais.
+
 Le chemin expérimental GoW3 appelle maintenant NVIDIA NGX en mode DLAA natif
 1920×1080 vers 1920×1080 ou 2560×1440 vers 2560×1440. Il est indépendant de l'ancien extracteur caméra et
 des heuristiques d'upscaling héritées. Il reste explicitement activé par processus.

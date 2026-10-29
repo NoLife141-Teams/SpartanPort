@@ -1,5 +1,9 @@
 # État du travail GoW3 de Dot et intégration locale
 
+> État actuel sur `codex/gow3-dlss5` : DLAA natif retiré ;
+> [DLSS 5 NR + MSAA x2](gow3-dlss5-nr-experiment.md) est le profil GoW3 conservé.
+> Les résultats DLAA ci-dessous documentent les travaux précédents.
+
 Revue du 27 octobre 2026, heure de Toronto.
 
 Le travail de Dot est rapatrié dans ce dépôt sur la branche

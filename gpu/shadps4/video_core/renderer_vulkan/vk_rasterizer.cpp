@@ -80,7 +80,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
                     gow3_pair->Enabled() ? "armed" : "disabled: invalid paths");
     }
     if (gow3_inputs_enabled) {
-        std::printf("GoW3 inputs: camera diagnostics; stable ring snapshots required; native DLAA requested=%u\n",Gow3::NativeDlaaRequested());
+        std::printf("GoW3 inputs: camera diagnostics; stable ring snapshots required; guided NR requested=%u\n",Gow3::NeuralSceneRequested());
     }
     if(gow3_provenance_enabled && Gow3::Provenance::Requested(std::getenv("SPARTAN_GOW3_PIXELS"))) {
         try {
@@ -93,8 +93,8 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     scene_targets = std::make_unique<SceneTargets>(instance, scheduler, runtime, texture_cache);
     // Object motion first: it fixes the buffer addresses the motion shader variants embed.
     object_motion = std::make_unique<ObjectMotion>(instance, scheduler);
-    gow3_dlaa = std::make_unique<Gow3Dlaa>(instance,scheduler);
-    if(gow3_dlaa->Enabled()) texture_cache.EnableProvenance();
+    gow3_nr = std::make_unique<Gow3Nr>(instance,scheduler);
+    if(gow3_nr->Enabled()) texture_cache.EnableProvenance();
     camera_motion = std::make_unique<CameraMotion>(instance, scheduler, texture_cache, runtime);
     camera_motion->SetObjectMotion(object_motion.get());
     upscaler = std::make_unique<TemporalUpscaler>(instance, scheduler, texture_cache, runtime,
@@ -1166,24 +1166,23 @@ void Rasterizer::RecordGow3Pixels() {
     gow3_pixels->Record(*row,sources[0],layouts[0],sources[1],layouts[1],scheduler,texture_cache,allowed,motion);
 }
 
-void Rasterizer::ProcessGow3Dlaa(const GraphicsPipeline* pipeline) {
-    if(!gow3_dlaa->Enabled()) return;
+void Rasterizer::ProcessGow3Nr(const GraphicsPipeline* pipeline) {
+    if(!gow3_nr->Enabled()) return;
     const auto& key=pipeline->GetGraphicsKey();
     if(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash!=0x475a41468b1a1fbcull ||
        pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash!=0x475a4146e3a74097ull) return;
-    // The single-sample permutation was observed in the isolated 1080p no-MSAA
-    // session. Keep the exact pair and sample-specific permutation guard.
+    // Observed composition pair; the cache can assign a different module ordinal.
     const u64 composition_ps=AmdGpu::NoMsaa()?0xefd0530963dc1d54ull:0xefd0530963dc1d55ull;
     // Stage keys contain a module-vector ordinal (HashCombine(raw_hash,perm)),
     // not a semantic variant ID. A cold NR cache observed the same single-sample
     // composition at ordinal 1. Source backing/format/sample guards below still
-    // prove the native scene. Keep the older DLAA acceptance unchanged.
+    // prove the native scene.
     const auto ps_key=key.stage_hashes[u32(Shader::SwStage::Fragment)];
     const bool nr_cold=Gow3::NeuralSceneRequested()&&AmdGpu::NoMsaa()&&ps_key==0xefd0530963dc1d55ull;
     if(key.stage_hashes[u32(Shader::SwStage::Vertex)]!=0xefd04d8023fec408ull ||
        (ps_key!=composition_ps&&!nr_cold)) {
         static bool reported=false;
-        if(!reported) {reported=true;std::printf("GoW3 DLAA: unapproved composition keys vs=%016llx ps=%016llx samples=%u\n",
+        if(!reported) {reported=true;std::printf("GoW3 NR scene: unapproved composition keys vs=%016llx ps=%016llx samples=%u\n",
             (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Vertex)],
             (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Fragment)],AmdGpu::NoMsaa()?1:2);}
         return;
@@ -1196,9 +1195,9 @@ void Rasterizer::ProcessGow3Dlaa(const GraphicsPipeline* pipeline) {
         if(write.dstBinding<1 || write.dstBinding>2 || write.dstArrayElement || write.descriptorCount!=1 ||
            write.descriptorType!=vk::DescriptorType::eSampledImage || !write.pImageInfo) continue;
         const auto index=u32(write.pImageInfo-image_infos.data());
-        if(index>=image_infos.size() || index>=gow3_dlaa_bindings.size()) continue;
+        if(index>=image_infos.size() || index>=gow3_nr_bindings.size()) continue;
         const u32 n=write.dstBinding-1;
-        sources[n]=gow3_dlaa_bindings[index];layouts[n]=write.pImageInfo->imageLayout;found|=1u<<n;
+        sources[n]=gow3_nr_bindings[index];layouts[n]=write.pImageInfo->imageLayout;found|=1u<<n;
         if(n==1) color_binding=&image_infos[index];
     }
     vk::ImageView depth{},color{},motion{};u32 w=0,h=0;
@@ -1207,10 +1206,10 @@ void Rasterizer::ProcessGow3Dlaa(const GraphicsPipeline* pipeline) {
         const char* error=texture_cache.WithPixelSources(sources[0],layouts[0],sources[1],layouts[1],components,
             [&](vk::ImageView d,vk::ImageView c,u32 width,u32 height){depth=d;color=c;w=width;h=height;},
             AmdGpu::NoMsaa()?vk::SampleCountFlagBits::e1:vk::SampleCountFlagBits::e2);
-        if(error) {static u32 errors=0;if(errors++%120==0)std::printf("GoW3 DLAA: source rejection=%s samples=%u\n",error,AmdGpu::NoMsaa()?1:2);}
+        if(error) {static u32 errors=0;if(errors++%120==0)std::printf("GoW3 NR scene: source rejection=%s samples=%u\n",error,AmdGpu::NoMsaa()?1:2);}
         if(!error) motion=object_motion->RecordDiagnosticRead(w,h,sources[0].uid);
     }
-    const auto replacement=gow3_dlaa->Process(depth,layouts[0],color,layouts[1],motion,sources[0].uid,w,h);
+    const auto replacement=gow3_nr->Process(depth,layouts[0],color,layouts[1],motion,sources[0].uid,w,h);
     if(replacement && color_binding) { color_binding->imageView=replacement;color_binding->imageLayout=vk::ImageLayout::eGeneral; }
     // Composition closes exactly one produced scene, even when a queued flip
     // happens to contain two scenes. Accepted-flip diagnostics remain independent.
@@ -1353,7 +1352,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
 
     // spartanport: screen-space (clip disabled) draws into the upscaler's output-size images.
     RecordGow3Pixels();
-    ProcessGow3Dlaa(pipeline);
+    ProcessGow3Nr(pipeline);
     push_data.xscale *= target_scale[0];
     push_data.xoffset *= target_scale[0];
     push_data.yscale *= target_scale[1];
@@ -1477,8 +1476,6 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1)) {
         draw_jitter = upscaler->Jitter();
     }
-    if(gow3_dlaa->Active() && db_desc.first && !regs.IsClipDisabled() &&
-       texture_cache.GetImage(db_desc.first).image_uid==gow3_dlaa->Depth()) draw_jitter=gow3_dlaa->Jitter();
     UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     scheduler.BeginRendering(state);
@@ -1616,8 +1613,6 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth()) {
         draw_jitter = upscaler->Jitter();
     }
-    if(gow3_dlaa->Active() && db_desc.first && !Regs().IsClipDisabled() &&
-       texture_cache.GetImage(db_desc.first).image_uid==gow3_dlaa->Depth()) draw_jitter=gow3_dlaa->Jitter();
     UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     scheduler.BeginRendering(state);
@@ -1850,7 +1845,7 @@ Gow3::Flip Rasterizer::AcceptGow3Flip(u64 address, s32 buffer, bool eop) {
         break;
     case Gow3::FlipRoute::Unordered:
         // Never read/reset the accumulator from an unexpected thread.
-        std::printf("GoW3 inputs: unordered accepted flip=%llu; camera interval NOT completed, DLAA=blocked\n",
+        std::printf("GoW3 inputs: unordered accepted flip=%llu; camera interval NOT completed, NR=blocked\n",
                     (unsigned long long)flip.id);
         if (gow3_trace_enabled) {
             Gow3::Trace::Write({.kind=Gow3::Trace::Kind::Unordered, .flip=flip});
@@ -1872,8 +1867,8 @@ void Rasterizer::FinishGow3Flip(Gow3::Flip flip) {
     if (gow3_pair) gow3_pair->Boundary(flip,frame->number,frame->status);
     if(gow3_pixels) gow3_pixels->Boundary(*frame,gow3_frames.Inputs(),
         gow3_pair && gow3_pair->GetStats().state==Gow3::Pair::State::Active,object_motion->DiagnosticStats());
-    if(gow3_dlaa->OnFlip()) object_motion->InvalidateHistory();
-    if(Gow3::MotionDiagnostic() && object_motion->Enabled() && !gow3_dlaa->Enabled()) {
+    if(gow3_nr->OnFlip()) object_motion->InvalidateHistory();
+    if(Gow3::MotionDiagnostic() && object_motion->Enabled() && !gow3_nr->Enabled()) {
         if(frame->status!=Gow3::Status::Candidate) object_motion->InvalidateHistory();
         object_motion->OnFrameStart();
     }
@@ -1888,10 +1883,10 @@ void Rasterizer::FinishGow3Flip(Gow3::Flip flip) {
         char note[1024];
         const auto reasons = Gow3::FormatSnapshotCounts(frame->snapshot_reasons);
         std::snprintf(note, sizeof(note),
-            "GoW3 inputs: frame=%llu flip=%llu buffer=%d eop=%u status=%s samples=%u unsnapshotted=%u size=%ux%u DLAA=%s snapshot-reasons=%s\n",
+            "GoW3 inputs: frame=%llu flip=%llu buffer=%d eop=%u status=%s samples=%u unsnapshotted=%u size=%ux%u NR=%s snapshot-reasons=%s\n",
             (unsigned long long)frame->number, (unsigned long long)flip.id, flip.buffer,
             unsigned(flip.eop), Gow3::Name(frame->status), frame->samples,
-            frame->unsnapshotted, frame->width, frame->height, Gow3::NativeDlaaRequested()?"separate-native-hook":"blocked", reasons.data());
+            frame->unsnapshotted, frame->width, frame->height, Gow3::NeuralSceneRequested()?"separate-NR-hook":"blocked", reasons.data());
         std::printf("%s", note);
         if (FrameCapture::Active()) FrameCapture::Note(note);
     }
@@ -2020,7 +2015,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     set_writes.clear();
     buffer_infos.clear();
     image_infos.clear();
-    if(gow3_dlaa->Enabled()) gow3_dlaa_bindings={};
+    if(gow3_nr->Enabled()) gow3_nr_bindings={};
     if(gow3_provenance_enabled) {
         const auto* row=pipeline->IsCompute() ? nullptr : gow3_pair->Pending();
         gow3_image_provenance.Begin(row ? row->serial : 0,row ? row->interval : 0);
@@ -2573,7 +2568,7 @@ void Rasterizer::ObserveGow3Inputs(const Shader::Info& stage, u32 slot,
     gow3_frames.Observe(stage.pgm_hash, slot, snapshot, size, depth.info.guest_address,
                         depth.info.size.width, depth.info.size.height,
                         reason);
-    gow3_dlaa->Observe(stage.pgm_hash,slot,snapshot,size,depth.image_uid,depth.info.size.width,depth.info.size.height);
+    gow3_nr->Observe(stage.pgm_hash,slot,snapshot,size,depth.image_uid,depth.info.size.width,depth.info.size.height);
 }
 
 void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* prepared,
@@ -2774,8 +2769,8 @@ void Rasterizer::NoteGow3Binding(VideoCore::ImageId id,Gow3::Provenance::Path pa
     // Same sole-writer ownership as image_infos, including the helper's partial
     // completion. No access to Pair::Capture from the helper thread.
     const auto index=u32(image_infos.size()-1);
-    if(gow3_dlaa->Enabled() && index<gow3_dlaa_bindings.size())
-        gow3_dlaa_bindings[index]=texture_cache.DescribeProvenance(id,image_infos.back().imageView);
+    if(gow3_nr->Enabled() && index<gow3_nr_bindings.size())
+        gow3_nr_bindings[index]=texture_cache.DescribeProvenance(id,image_infos.back().imageView);
     if(!gow3_provenance_enabled || !gow3_image_provenance.Enabled()) return;
     if(index>=Gow3::Provenance::Bindings::Capacity) {
         gow3_image_provenance.Set(index,{},path); return;
