@@ -10,6 +10,10 @@ La scène 4K avec sortie écran 1080p est également testée, OFF et DLAA seul :
 [captures finales et limites du supersampling](gow3-4k-to-1080p.md).
 Les essais MSAA2 décrits ci-dessous restent des résultats historiques.
 
+Le [laboratoire DLSS 5 Neural Rendering](gow3-dlss5-nr-experiment.md) utilise
+maintenant le SDK/runtime officiel de RTX Remix. Son aperçu SDR en jeu est
+distinct de ce chemin DLAA et l'exclut pendant la session expérimentale.
+
 Le flou excessif observé au premier essai a été relié à un signe de jitter inversé,
 puis corrigé et testé : voir [la mesure indépendante et le nouvel essai Gaia](gow3-dlaa-jitter-fix.md).
 

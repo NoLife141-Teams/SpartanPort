@@ -121,5 +121,34 @@ int main() {
     assert(!strict.Prepare(draw).load); // rejected previous key did not seed history
     strict.NextFrame();
     assert(strict.Prepare(draw).load);
+    // Shared meshes keep their affine instance even if draws are reordered and
+    // Gaia moves. Near ties, teleports, missing frames and repeated poses reject.
+    AffineInstances tracker;
+    AffineInstances::Pose a{1,0,0,0,1,0,0,0,1,10,20,30},b=a;
+    b[9]=20;
+    const auto ia=tracker.Resolve(draw,a),ib=tracker.Resolve(draw,b);
+    assert(ia.id && ib.id && ia.id!=ib.id && !ia.matched && !ib.matched);
+    tracker.NextFrame();a[9]+=.1f;b[9]+=.1f;
+    assert(tracker.Resolve(draw,b).id==ib.id);
+    const auto moved=tracker.Resolve(draw,a);
+    assert(moved.id==ia.id && moved.matched && moved.repeated_geometry);
+    tracker.NextFrame();
+    auto repeated_pose=tracker.Resolve(draw,a);
+    assert(repeated_pose.id==ia.id && tracker.Resolve(draw,a).id==ia.id);
+    tracker.NextFrame();assert(!tracker.Resolve(draw,a).matched);
+    tracker.NextFrame();tracker.NextFrame();assert(!tracker.Resolve(draw,a).matched);
+    tracker.NextFrame();a[9]+=10;assert(!tracker.Resolve(draw,a).matched);
+    auto bad=a;bad[0]=std::numeric_limits<float>::quiet_NaN();
+    assert(!tracker.Resolve(draw,bad).id);
+    AffineInstances ties;
+    a={1,0,0,0,1,0,0,0,1,0,0,0};b=a;b[9]=.2f;
+    ties.Resolve(draw,a);ties.Resolve(draw,b);ties.NextFrame();a[9]=.1f;
+    assert(!ties.Resolve(draw,a).matched);
+    // Instance identity participates in History keys; no cross-instance reads.
+    History instance_history(1024,true);draw.instance_identity=ia.id;
+    auto sa=instance_history.Prepare(draw);draw.instance_identity=ib.id;
+    auto sb=instance_history.Prepare(draw);instance_history.NextFrame();
+    assert(instance_history.Prepare(draw).load==sb.store);
+    draw.instance_identity=ia.id;assert(instance_history.Prepare(draw).load==sa.store);
     std::puts("Motion history: PASS (ranges, matching, capacity, gating, strict duplicate rejection, index cache, jitter)");
 }

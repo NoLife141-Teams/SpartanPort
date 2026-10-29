@@ -1174,8 +1174,14 @@ void Rasterizer::ProcessGow3Dlaa(const GraphicsPipeline* pipeline) {
     // The single-sample permutation was observed in the isolated 1080p no-MSAA
     // session. Keep the exact pair and sample-specific permutation guard.
     const u64 composition_ps=AmdGpu::NoMsaa()?0xefd0530963dc1d54ull:0xefd0530963dc1d55ull;
+    // Stage keys contain a module-vector ordinal (HashCombine(raw_hash,perm)),
+    // not a semantic variant ID. A cold NR cache observed the same single-sample
+    // composition at ordinal 1. Source backing/format/sample guards below still
+    // prove the native scene. Keep the older DLAA acceptance unchanged.
+    const auto ps_key=key.stage_hashes[u32(Shader::SwStage::Fragment)];
+    const bool nr_cold=Gow3::NeuralSceneRequested()&&AmdGpu::NoMsaa()&&ps_key==0xefd0530963dc1d55ull;
     if(key.stage_hashes[u32(Shader::SwStage::Vertex)]!=0xefd04d8023fec408ull ||
-       key.stage_hashes[u32(Shader::SwStage::Fragment)]!=composition_ps) {
+       (ps_key!=composition_ps&&!nr_cold)) {
         static bool reported=false;
         if(!reported) {reported=true;std::printf("GoW3 DLAA: unapproved composition keys vs=%016llx ps=%016llx samples=%u\n",
             (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Vertex)],
@@ -1360,7 +1366,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         if(object && object->address && (!is_indexed || index_bind.motion_snapshot)) {
             // GoW3 rotates its object constants each frame (observed 32 MiB apart).
             // Their address is provenance, not persistent object identity. Match exact
-            // geometry/topology/range instead; strict history rejects repeated meshes.
+            // geometry/topology/range instead. NR can distinguish repeated instances
+            // from the stable model-constant snapshot below; strict history still
+            // rejects repetitions that cannot be distinguished.
             const u64 object_key[]={motion_geometry,pipeline->GetGraphicsKey().stage_hashes[u32(Shader::SwStage::Vertex)],
                 db_desc.first?texture_cache.GetImage(db_desc.first).image_uid:0,
                 u64(std::bit_cast<u32>(push_data.xscale))<<32|std::bit_cast<u32>(push_data.yscale),
@@ -1371,7 +1379,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
                 .indices=is_indexed?regs.index_base_address.Address<VAddr>()+u64(index_offset)*(index_bind.type==vk::IndexType::eUint16?2:4):0,
                 .topology=is_indexed?index_bind.motion_topology:0,.index_count=regs.num_indices,
                 .instances=regs.num_instances.NumInstances(),.first_instance=first_instance,
-                .vertices=is_indexed?index_bind.motion_range:Motion::VertexRange{base_vertex,regs.num_indices}});
+                .vertices=is_indexed?index_bind.motion_range:Motion::VertexRange{base_vertex,regs.num_indices}},
+                constant_ring->Data(object->offset),object->size);
             if(auto* row=gow3_pair?gow3_pair->Pending():nullptr) {
                 row->motion_geometry_key=identity; row->motion_object_buffer=object->address;
                 row->motion_flags=object_motion->DiagnosticFlags(push_data.motion_param);

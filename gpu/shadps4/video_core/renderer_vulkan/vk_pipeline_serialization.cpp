@@ -38,6 +38,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_warmup_inbox.h"
+#include "video_core/renderer_vulkan/gow3_motion.h"
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
@@ -53,7 +54,7 @@ namespace {
 // SPARTAN_AMD_PATHS_OFF=shaderext) get their own shader binary cache version.
 u32 CurrentShaderBinaryVersion() {
     return LightingTest::ShaderBinaryVersion(
-        Serialization::ShaderBinaryVersion,
+        Serialization::ShaderBinaryVersion+(Gow3::NeuralSceneRequested()?1u:0u), // affine validity tag in NR variants
         LightingTest::ShaderBinarySalt(LightingTest::Current().dref,
                                        AmdPathsOff::Current().shaderext));
 }

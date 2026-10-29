@@ -34,6 +34,7 @@ extern "C" void runtime_restart(void); // src/probe.c: starts run.py again, ends
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/gow3_dlaa_control.h"
+#include "video_core/renderer_vulkan/gow3_nr_control.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/renderdoc.h"
 
@@ -1628,6 +1629,13 @@ bool HandleEvent(const SDL_Event& event) {
             }
             return true;
         }
+        if(event.key.key==SDLK_F7 && !is_open && !text_entry_active &&
+           Vulkan::Gow3::NeuralPreviewControl().available.load()) {
+            SDL_Window* focus=SDL_GetKeyboardFocus();
+            if(down && !event.key.repeat && focus && SDL_GetWindowID(focus)==event.key.windowID)
+                Vulkan::Gow3::NeuralPreviewControl().toggles.fetch_add(1);
+            return true;
+        }
         if(event.key.key==SDLK_F10 && !is_open && !text_entry_active &&
            Vulkan::Gow3::NativeDlaaControl().available.load()) {
             SDL_Window* focus=SDL_GetKeyboardFocus();
@@ -1801,7 +1809,8 @@ bool Visible() {
     return initialized && (loading || background_total || PrefetchActive() || CompileNoteActive() ||
                            menu_open || text_entry_active || choice_active || choice_retiring ||
                            toast_active || trophy_view || s.show_fps || NoticeActive() ||
-                           (s.actor_watch_supported && s.enemy_health_bar) || Vulkan::Gow3::NativeDlaaControl().visible.load());
+                           (s.actor_watch_supported && s.enemy_health_bar) || Vulkan::Gow3::NativeDlaaControl().visible.load() ||
+                           Vulkan::Gow3::NeuralPreviewControl().visible.load());
 }
 
 bool CapturesInput() {
@@ -1865,6 +1874,24 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     UpdateTrophyTextures();
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
+    if(Vulkan::Gow3::NeuralPreviewControl().visible.load() && !loading && !menu_open) {
+        using Vulkan::Gow3::NrState;
+        auto& nr=Vulkan::Gow3::NeuralPreviewControl();
+        const auto state=nr.state.load();
+        const char* label=state==NrState::Active?"NR ACTIF":state==NrState::Off?"NR OFF":
+            state==NrState::Waiting?"NR EN ATTENTE":state==NrState::Failed?"NR ERREUR":"NR INDISPONIBLE";
+        const auto* viewport=ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x+viewport->WorkSize.x-16*base_scale,
+            viewport->WorkPos.y+16*base_scale),ImGuiCond_Always,ImVec2(1,0));
+        ImGui::SetNextWindowBgAlpha(.78f);
+        ImGui::Begin("##gow3-nr-status",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoDecoration|
+            ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing);
+        ImGui::TextColored(state==NrState::Active?ImVec4(.35f,1,.55f,1):ImVec4(1,.85f,.3f,1),"%s | F7",label);
+        if(nr.guided.load()) ImGui::TextUnformatted(nr.hud_protected.load()?
+            "DLSS 5 | profondeur + mouvements | HUD après NR":"DLSS 5 | guides de scène | en attente de validation GPU");
+        else ImGui::TextUnformatted("APERÇU DLSS 5 | image finale + HUD | sans guides temporels");
+        ImGui::End();
+    }
     if(Vulkan::Gow3::NativeDlaaControl().visible.load() && !loading && !menu_open) {
         using Vulkan::Gow3::DlaaState;
         auto& control=Vulkan::Gow3::NativeDlaaControl();

@@ -20,6 +20,7 @@
 #include "video_core/renderer_vulkan/vk_warmup_inbox.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/gow3_dlaa_control.h"
+#include "video_core/renderer_vulkan/vk_nr_preview.h"
 #include "video_core/texture_cache/image.h"
 
 #include <miniz.h>
@@ -358,6 +359,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
       swapchain{instance, window}, runtime{instance, draw_scheduler},
       rasterizer{std::make_unique<Rasterizer>(instance, draw_scheduler, runtime, liverpool)},
       texture_cache{rasterizer->GetTextureCache()} {
+    nr_preview = std::make_unique<NrPreview>(instance);
     const u32 num_images = swapchain.GetImageCount();
     const vk::Device device = instance.GetDevice();
 
@@ -415,6 +417,7 @@ Presenter::~Presenter() {
     draw_scheduler.Finish();
     present_scheduler.Finish();
     flip_scheduler.Finish();
+    nr_preview.reset();
     Check(draw_scheduler.CommandBuffer().reset());
     Check(present_scheduler.CommandBuffer().reset());
     Check(flip_scheduler.CommandBuffer().reset());
@@ -1011,6 +1014,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
                          vk::ImageLayout::eTransferDstOptimal,
                          MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height),
                          vk::Filter::eLinear);
+        if (is_game_frame) nr_preview->Apply(scheduler, cmdbuf, *frame, swapchain_image, extent);
         CaptureGow3Display(instance,scheduler,cmdbuf,swapchain_image,extent,swapchain.GetSurfaceFormat().format,
                           *frame,is_game_frame&&!is_reusing_frame);
         if (VideoCore::ConsumeGameOnlyScreenshotRequests() != 0) {

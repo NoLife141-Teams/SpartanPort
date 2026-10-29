@@ -65,6 +65,18 @@ public:
     bool Evaluate(vk::CommandBuffer command, const Frame& frame);
     void ReleaseFeature();
 
+    // Opt-in, mutually exclusive NR presentation laboratory. SR/DLAA callers
+    // see Available()==false in this mode and cannot release its feature.
+    [[nodiscard]] bool NrAvailable() const;
+    bool CreateNrFeature(vk::CommandBuffer command, u32 width, u32 height);
+    bool EvaluateNrPreview(vk::CommandBuffer command, const Resource& color, const Resource& output);
+    struct NrFrame {
+        Resource color, output, depth, motion;
+        bool reset;
+    };
+    bool EvaluateNrScene(vk::CommandBuffer command, const NrFrame& frame);
+    void ReleaseNrFeature();
+
 private:
     Dlss();
     struct Impl;

@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0) uniform texture2D source_color;
+#ifdef ENCODE
+layout(binding=1,rgba32f) writeonly uniform image2D destination;
+#else
+layout(binding=1,rgba16f) writeonly uniform image2D destination;
+#endif
+void main() {
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy),sz=imageSize(destination);
+    if(any(greaterThanEqual(p,sz))) return;
+    vec4 c=texelFetch(source_color,p,0);
+    vec3 v=clamp(c.rgb,0,1);
+#ifdef ENCODE
+    // Undo the hardware sRGB decode of the verified RGBA8_SRGB scene view.
+    // This restores display encoding; it is not a new tone mapper.
+    v=mix(1.055*pow(v,vec3(1.0/2.4))-.055,12.92*v,lessThanEqual(v,vec3(.0031308)));
+#else
+    // The guest composition still expects linear RGB from its source view.
+    v=mix(pow((v+.055)/1.055,vec3(2.4)),v/12.92,lessThanEqual(v,vec3(.04045)));
+#endif
+    imageStore(destination,p,vec4(v,c.a));
+}

@@ -31,7 +31,7 @@ public:
     }
 
     using DrawInfo = Motion::Draw;
-    u32 PrepareDraw(const DrawInfo& draw);
+    u32 PrepareDraw(const DrawInfo& draw,const void* snapshot=nullptr,size_t size=0);
     /// Small skeletons: whether the bone palette changed (Motion::History::Moving).
     bool Moving(const Motion::History::GateKey& key, u64 palette) {
         return history.Moving(key, palette);
@@ -51,7 +51,7 @@ public:
 
     /// Start of a frame (display pass).
     void OnFrameStart();
-    void InvalidateHistory() { history.NextFrame(); history.NextFrame(); }
+    void InvalidateHistory() { history.NextFrame(); history.NextFrame(); instances.NextFrame(); instances.NextFrame(); }
 
     /// The motion image for the compose pass (layout General after this call) and whether it
     /// holds this frame's vectors at `width` x `height`.
@@ -80,6 +80,7 @@ private:
     static constexpr u32 PositionsPerFrame = 4u << 20;
     const u32 capacity=Gow3::MotionDiagnostic()?(1u<<20):PositionsPerFrame;
     Motion::History history{capacity,Gow3::MotionDiagnostic()};
+    Motion::AffineInstances instances;
     Motion::IndexRangeCache index_ranges;
     std::array<u64, FrameSlots> params_ticks{};
     vk::Buffer params_buffer{};

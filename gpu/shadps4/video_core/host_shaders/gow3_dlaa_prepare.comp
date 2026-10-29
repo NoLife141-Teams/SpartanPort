@@ -13,6 +13,9 @@ layout(binding=2) uniform SceneTexture object_motion;
 layout(binding=3,rgba16f) writeonly uniform image2D color_out;
 layout(binding=4,r32f) writeonly uniform image2D depth_out;
 layout(binding=5,rg16f) writeonly uniform image2D motion_out;
+#ifdef NR_GUIDES
+layout(binding=6,rgba32f) writeonly uniform image2D guide_diagnostic;
+#endif
 layout(push_constant) uniform Params { mat4 reprojection; vec2 raster_jitter; uint camera_valid; } pc;
 void main() {
     ivec2 p=ivec2(gl_GlobalInvocationID.xy), sz=imageSize(color_out);
@@ -32,7 +35,11 @@ void main() {
         flow=vec2((ndc.x+1)*.5*sz.x,(1-ndc.y)*.5*sz.y)-current;
     }
     vec4 m=texelFetch(object_motion,p,s);
-    if(m.z>.999 && abs(m.w-d)<=2e-7 && all(lessThan(abs(m.xy),vec2(sz)))) flow=m.xy;
+    bool object_valid=m.z>.999 && abs(m.w-d)<=2e-7 && all(lessThan(abs(m.xy),vec2(sz)));
+#ifdef NR_GUIDES
+    imageStore(guide_diagnostic,p,vec4(object_valid?(m.z>1.5?2:1):0,m.w,flow));
+#endif
+    if(object_valid) flow=m.xy;
     if(any(isnan(flow))||any(isinf(flow))) flow=vec2(0);
 #ifdef SINGLE_SAMPLE
     imageStore(color_out,p,texelFetch(scene_color,p,0));

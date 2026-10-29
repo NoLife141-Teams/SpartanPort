@@ -18,6 +18,7 @@
 #endif
 #include <windows.h>
 #include "../../../dlss_bridge/spartanport_dlss_bridge.h"
+#include "../../../dlss_bridge/spartanport_dlssnr_bridge.h"
 #endif
 
 namespace Vulkan {
@@ -32,6 +33,12 @@ int Dlss::QualityForScale(float scale) {
 namespace {
 constexpr wchar_t BridgeName[] = L"spartanport_dlss.dll";
 constexpr wchar_t NgxName[] = L"nvngx_dlss.dll";
+constexpr wchar_t NrBridgeName[] = L"spartanport_dlssnr.dll";
+constexpr wchar_t NrNgxName[] = L"nvngx_dlssnr.dll";
+bool NrPreviewRequested() {
+    const char* value = std::getenv("SPARTAN_GOW3_NR_PREVIEW");
+    return value && std::string_view(value) == "1";
+}
 
 std::filesystem::path ExecutableDirectory() {
     std::wstring path(MAX_PATH, L'\0');
@@ -72,6 +79,7 @@ bool CollectExtensions(const VkExtensionProperties* required, u32 count,
 struct Dlss::Impl {
     HMODULE module{};
     const SpartanDlssApi* api{};
+    const SpartanDlssNrApi* nr{};
     std::vector<std::string> instance_extensions, device_extensions;
     std::optional<FeatureDesc> feature;
     std::string problem;
@@ -87,12 +95,13 @@ struct Dlss::Impl {
 Dlss* Dlss::Get() {
     static Dlss* const dlss = []() -> Dlss* {
         const char* setting = std::getenv("SPARTAN_DLSS");
-        if (setting && setting[0] == '0') {
+        const bool nr = NrPreviewRequested();
+        if (!nr && setting && setting[0] == '0') {
             return nullptr;
         }
         const auto directory = ExecutableDirectory();
-        if (!std::filesystem::is_regular_file(directory / BridgeName) ||
-            !std::filesystem::is_regular_file(directory / NgxName)) {
+        if (!std::filesystem::is_regular_file(directory / (nr ? NrBridgeName : BridgeName)) ||
+            !std::filesystem::is_regular_file(directory / (nr ? NrNgxName : NgxName))) {
             return nullptr;
         }
         auto* created = new Dlss;
@@ -109,12 +118,22 @@ Dlss* Dlss::Get() {
 
 Dlss::Dlss() : impl{std::make_unique<Impl>()} {
     const auto directory = ExecutableDirectory();
-    impl->module = LoadLibraryW((directory / BridgeName).c_str());
+    const bool nr = NrPreviewRequested();
+    impl->module = LoadLibraryW((directory / (nr ? NrBridgeName : BridgeName)).c_str());
+    if (nr) {
+        auto get = impl->module ? reinterpret_cast<SpartanDlssNrGetApiFn>(
+            GetProcAddress(impl->module, "SpartanDlssNrGetApi")) : nullptr;
+        impl->nr = get ? get() : nullptr;
+        if (!impl->nr || impl->nr->abi != SPARTAN_DLSSNR_BRIDGE_ABI || !impl->nr->sdk_compiled) {
+            impl->Disable("NR preview needs the NR SDK build of spartanport_dlssnr.dll");
+            return;
+        }
+    }
     const auto get_api =
         impl->module ? reinterpret_cast<SpartanDlssGetApiFn>(GetProcAddress(impl->module, "SpartanDlssGetApi"))
                      : nullptr;
     impl->api = get_api ? get_api() : nullptr;
-    if (!impl->api || impl->api->abi != SPARTAN_DLSS_BRIDGE_ABI) {
+    if (!nr && (!impl->api || impl->api->abi != SPARTAN_DLSS_BRIDGE_ABI)) {
         impl->Disable("spartanport_dlss.dll is missing or from another version");
         return;
     }
@@ -125,7 +144,8 @@ Dlss::Dlss() : impl{std::make_unique<Impl>()} {
     }
     std::error_code error;
     std::filesystem::create_directories(data, error);
-    if (!impl->api->Configure(directory.c_str(), data.c_str(), BridgeLog)) {
+    const auto configure = nr ? impl->nr->Configure : impl->api->Configure;
+    if (!configure(directory.c_str(), data.c_str(), BridgeLog)) {
         impl->Disable("bridge configuration failed");
     }
 }
@@ -140,7 +160,8 @@ void Dlss::AppendInstanceExtensions(std::vector<const char*>& enabled) {
     }
     u32 count{};
     const VkExtensionProperties* required{};
-    if (!impl->api->InstanceExtensions(&count, &required)) {
+    const auto query = impl->nr ? impl->nr->InstanceExtensions : impl->api->InstanceExtensions;
+    if (!query(&count, &required)) {
         return impl->Disable("instance extension query failed");
     }
     const auto [result, extensions] = vk::enumerateInstanceExtensionProperties();
@@ -162,7 +183,8 @@ void Dlss::AppendDeviceExtensions(vk::Instance instance, vk::PhysicalDevice phys
     }
     u32 count{};
     const VkExtensionProperties* required{};
-    if (!impl->api->DeviceExtensions(instance, physical, &count, &required)) {
+    const auto query = impl->nr ? impl->nr->DeviceExtensions : impl->api->DeviceExtensions;
+    if (!query(instance, physical, &count, &required)) {
         return impl->Disable("this GPU or driver does not support DLSS (GeForce RTX needed)");
     }
     const auto [result, extensions] = physical.enumerateDeviceExtensionProperties();
@@ -178,17 +200,18 @@ void Dlss::Initialize(vk::Instance instance, vk::PhysicalDevice physical, vk::De
         return;
     }
     impl->initialized = true;
-    if (!impl->api->Initialize(instance, physical, device,
+    const auto initialize = impl->nr ? impl->nr->Initialize : impl->api->Initialize;
+    if (!initialize(instance, physical, device,
                                VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr,
                                VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr)) {
         return impl->Disable("NVIDIA NGX initialization failed (update the GPU driver)");
     }
     impl->available = true;
-    std::printf("DLSS: ready\n");
+    std::printf("DLSS: %sready\n", impl->nr ? "NR preview (SR/DLAA excluded), " : "");
 }
 
 bool Dlss::Available() const {
-    return impl->available;
+    return impl->available && !impl->nr;
 }
 
 std::string Dlss::Problem() const {
@@ -200,7 +223,7 @@ bool Dlss::HasFeature(const FeatureDesc& desc) const {
 }
 
 bool Dlss::CreateFeature(vk::CommandBuffer command, const FeatureDesc& desc) {
-    if (!impl->available) {
+    if (!Available()) {
         return false;
     }
     impl->feature.reset();
@@ -215,7 +238,7 @@ bool Dlss::CreateFeature(vk::CommandBuffer command, const FeatureDesc& desc) {
 }
 
 bool Dlss::Evaluate(vk::CommandBuffer command, const Frame& frame) {
-    if (!impl->available || !impl->feature) {
+    if (!Available() || !impl->feature) {
         return false;
     }
     const auto image = [](const Resource& r) {
@@ -234,6 +257,7 @@ bool Dlss::Evaluate(vk::CommandBuffer command, const Frame& frame) {
 }
 
 void Dlss::ReleaseFeature() {
+    if (impl->nr) return;
     impl->feature.reset();
     if (impl->api) {
         impl->api->ReleaseFeature();
@@ -243,10 +267,53 @@ void Dlss::ReleaseFeature() {
 void Dlss::Shutdown() {
     impl->available = false;
     impl->feature.reset();
-    if (impl->api && impl->initialized) {
-        impl->api->Shutdown();
+    if ((impl->api || impl->nr) && impl->initialized) {
+        if (impl->nr) impl->nr->Shutdown();
+        else impl->api->Shutdown();
         impl->initialized = false;
     }
+}
+
+bool Dlss::NrAvailable() const { return impl->available && impl->nr; }
+bool Dlss::CreateNrFeature(vk::CommandBuffer command, u32 width, u32 height) {
+    return NrAvailable() && impl->nr->CreateFeature(command, width, height);
+}
+bool Dlss::EvaluateNrPreview(vk::CommandBuffer command, const Resource& color, const Resource& output) {
+    if (!NrAvailable()) return false;
+    const auto image = [](const Resource& r) {
+        return SpartanDlssImage{r.image, r.view, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                                static_cast<VkFormat>(r.format), r.width, r.height};
+    };
+    SpartanDlssNrFrame frame{};
+    frame.color = image(color);
+    frame.output = image(output);
+    frame.display_encoded = frame.reset = 1;
+    frame.settings = {1, 1, 0, 0, 0, 0, 1};
+    if (impl->nr->Evaluate(command, &frame)) return true;
+    impl->problem = impl->nr->Problem();
+    return false;
+}
+bool Dlss::EvaluateNrScene(vk::CommandBuffer command, const NrFrame& input) {
+    if (!NrAvailable()) return false;
+    const auto image = [](const Resource& r) {
+        return SpartanDlssImage{r.image, r.view, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                                static_cast<VkFormat>(r.format), r.width, r.height};
+    };
+    SpartanDlssNrFrame frame{};
+    frame.color = image(input.color);
+    frame.output = image(input.output);
+    frame.depth = image(input.depth);
+    frame.motion = image(input.motion);
+    frame.display_encoded = 1;
+    frame.reset = input.reset;
+    frame.depth_inverted = 0; // GoW3 hardware depth, near=0, far/clear=1
+    frame.settings = {1, 1, 1, 0, 0, 0, 1};
+    if (impl->nr->Evaluate(command, &frame)) return true;
+    impl->problem = impl->nr->Problem();
+    return false;
+}
+void Dlss::ReleaseNrFeature() {
+    if (impl->nr && impl->initialized) impl->nr->ReleaseFeature();
 }
 
 #else
@@ -277,6 +344,11 @@ bool Dlss::Evaluate(vk::CommandBuffer, const Frame&) {
     return false;
 }
 void Dlss::ReleaseFeature() {}
+bool Dlss::NrAvailable() const { return false; }
+bool Dlss::CreateNrFeature(vk::CommandBuffer, u32, u32) { return false; }
+bool Dlss::EvaluateNrPreview(vk::CommandBuffer, const Resource&, const Resource&) { return false; }
+bool Dlss::EvaluateNrScene(vk::CommandBuffer, const NrFrame&) { return false; }
+void Dlss::ReleaseNrFeature() {}
 
 #endif
 

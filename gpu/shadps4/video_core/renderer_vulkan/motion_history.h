@@ -2,6 +2,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -216,7 +217,67 @@ struct Draw {
     uint64_t shader{}, geometry{}, indices{}, topology{};
     uint32_t index_count{}, instances{}, first_instance{};
     VertexRange vertices;
+    uint64_t instance_identity{};
     bool operator==(const Draw& rhs) const = default;
+};
+
+// Opt-in GoW3 instance association. The affine model transform is copied from
+// the same immutable constants used by the draw, never from guest memory later.
+// Match only the immediately preceding scene, exact geometry/topology/range,
+// and a unique nearby pose. Draw order and rotating constant addresses are not IDs.
+class AffineInstances {
+public:
+    using Pose = std::array<float, 12>; // 3x3 column-major, then xyz translation
+    struct Result { uint64_t id{}; bool matched{}, repeated_geometry{}; };
+    static constexpr size_t Capacity = 8192;
+    void NextFrame() { previous.swap(current); current.clear(); used=0; }
+    Result Resolve(Draw draw, const Pose& pose) {
+        if (used >= Capacity || !std::all_of(pose.begin(),pose.end(),
+                [](float v){return std::isfinite(v)&&std::abs(v)<1e7f;})) return {};
+        draw.instance_identity=0;
+        auto& entries=current[draw];
+        // Identical repeats keep the same ID, so strict History rejects them.
+        for (const auto& item:entries) if(item.pose==pose) {
+            const auto id=item.id;entries.push_back(item);++used;return {id,false,true};
+        }
+        double best=std::numeric_limits<double>::infinity(),second=best;
+        uint64_t chosen=0;bool repeated=false;
+        const auto found=previous.find(draw);
+        if(found!=previous.end()) {
+            repeated=found->second.size()>1;
+            for(const auto& item:found->second) {
+                double linear=0,translation=0;
+                for(size_t n=0;n<12;++n) {
+                    const double delta=double(pose[n])-item.pose[n];
+                    (n<9?linear:translation)+=delta*delta;
+                }
+                // Teleports, major pose changes and ambiguous neighbours warm up
+                // again. These bounds are in the game's model/world coordinates.
+                const double score=linear+translation;
+                if(score<best) {second=best;best=score;chosen=
+                    translation<=1.0 && linear<=.5625 ? item.id:0;}
+                else second=std::min(second,score);
+            }
+        }
+        const bool matched=chosen && second>std::max(4*best,.0625);
+        const auto id=matched?chosen:++next_id;
+        entries.push_back({pose,id});++used;
+        return {id,matched,repeated};
+    }
+private:
+    struct Entry { Pose pose; uint64_t id; };
+    struct Hash {
+        size_t operator()(const Draw& d) const {
+            uint64_t h=0;
+            for(uint64_t v:{d.shader,d.geometry,d.indices,d.topology,uint64_t(d.index_count),
+                uint64_t(d.instances),uint64_t(d.first_instance),uint64_t(d.vertices.first),uint64_t(d.vertices.count)})
+                h^=v+0x9e3779b97f4a7c15ULL+(h<<6)+(h>>2);
+            return size_t(h);
+        }
+    };
+    std::unordered_map<Draw,std::vector<Entry>,Hash> previous,current;
+    size_t used{};
+    uint64_t next_id{};
 };
 
 // CPU bookkeeping shared with the regression test. Draw identity includes topology and
@@ -317,6 +378,7 @@ private:
             mix(d.shader); mix(d.geometry); mix(d.indices); mix(d.topology);
             mix(d.index_count); mix(d.instances); mix(d.first_instance);
             mix(d.vertices.first); mix(d.vertices.count); mix(key.occurrence);
+            mix(d.instance_identity);
             return size_t(h);
         }
     };

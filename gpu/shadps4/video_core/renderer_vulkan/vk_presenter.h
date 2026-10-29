@@ -48,6 +48,7 @@ enum SchedulerType {
 };
 
 class Rasterizer;
+class NrPreview;
 
 class Presenter {
 public:
@@ -131,6 +132,7 @@ private:
     Swapchain swapchain;
     Runtime runtime;
     std::unique_ptr<Rasterizer> rasterizer;
+    std::unique_ptr<NrPreview> nr_preview;
     VideoCore::TextureCache& texture_cache;
     vk::UniqueCommandPool command_pool;
     std::vector<Frame> present_frames;

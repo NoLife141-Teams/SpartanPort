@@ -28,3 +28,21 @@ add_library(spartanport_dlss SHARED spartanport_dlss_bridge.cpp spartanport_dlss
 target_include_directories(spartanport_dlss PRIVATE "${DLSS_SDK_ROOT}/include" "${VULKAN_INCLUDE}")
 target_link_libraries(spartanport_dlss PRIVATE "${DLSS_SDK_ROOT}/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib")
 target_compile_definitions(spartanport_dlss PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+
+# Independent laboratory module. The public SDK currently lacks NR; keep a
+# loadable diagnostic in that case, rather than misidentifying SR as DLSS 5.
+option(SPARTAN_ENABLE_DLSSNR "Build the experimental NR adapter with an authorized beta SDK" OFF)
+set(DLSS_NR_SDK_ROOT "${DLSS_SDK_ROOT}" CACHE PATH "NR headers package (e.g. RTX Remix ngx_sdk_dlnr); base SDK supplies static NGX library")
+if(SPARTAN_ENABLE_DLSSNR AND
+   NOT EXISTS "${DLSS_NR_SDK_ROOT}/include/nvsdk_ngx_helpers_dlssnr_vk.h")
+    message(FATAL_ERROR "Set DLSS_NR_SDK_ROOT to the NVIDIA NR headers package containing include/nvsdk_ngx_helpers_dlssnr_vk.h; the public SR SDK alone is insufficient")
+endif()
+add_library(spartanport_dlssnr SHARED spartanport_dlssnr_bridge.cpp spartanport_dlssnr_bridge.h)
+target_include_directories(spartanport_dlssnr PRIVATE "${DLSS_SDK_ROOT}/include" "${VULKAN_INCLUDE}")
+if(SPARTAN_ENABLE_DLSSNR)
+    target_include_directories(spartanport_dlssnr BEFORE PRIVATE "${DLSS_NR_SDK_ROOT}/include")
+endif()
+target_compile_definitions(spartanport_dlssnr PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    SPARTAN_ENABLE_DLSSNR=$<BOOL:${SPARTAN_ENABLE_DLSSNR}>)
+# Also used by the explicit discovery-only experiment with the public SDK.
+target_link_libraries(spartanport_dlssnr PRIVATE "${DLSS_SDK_ROOT}/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib")

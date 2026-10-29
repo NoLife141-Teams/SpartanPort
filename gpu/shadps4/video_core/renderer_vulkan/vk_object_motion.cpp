@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "video_core/renderer_vulkan/vk_object_motion.h"
+#include "video_core/renderer_vulkan/gow3_camera_inputs.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -116,6 +117,7 @@ void ObjectMotion::OnFrameStart() {
         history.stats = {};
     }
     history.NextFrame();
+    if(Gow3::NeuralSceneRequested()) instances.NextFrame();
     ++frame;
     if (frame % Motion::IndexRangeCache::Unused == 0) {
         index_ranges.Trim(frame);
@@ -143,13 +145,33 @@ void ObjectMotion::OnFrameStart() {
     });
 }
 
-u32 ObjectMotion::PrepareDraw(const DrawInfo& draw) {
+u32 ObjectMotion::PrepareDraw(const DrawInfo& input,const void* snapshot,size_t size) {
     if (!enabled || SpartanToggle::Disabled(1u << 29) || params_used >= ParamsPerFrame) {
         return 0;
+    }
+    auto draw=input;
+    bool instance_match=false;
+    // Only this shader's 144-byte layout has an established affine contract.
+    // Other producers retain their original exact-geometry history.
+    if(Gow3::NeuralSceneRequested() && draw.shader==Gow3::DepthShader && snapshot && size==144) {
+        std::array<float,36> constants{};
+        std::memcpy(constants.data(),snapshot,144);
+        Motion::AffineInstances::Pose pose{};
+        constexpr std::array<size_t,12> indices{16,17,18,20,21,22,24,25,26,28,29,30};
+        for(size_t n=0;n<12;++n) pose[n]=constants[indices[n]];
+        const auto resolved=instances.Resolve(draw,pose);
+        if(!resolved.id) return 0;
+        // Unique meshes keep the established path, including large legitimate
+        // deformations. Only previously repeated meshes need pose association.
+        if(resolved.repeated_geometry) {
+            draw.instance_identity=resolved.id;
+            instance_match=resolved.matched;
+        }
     }
     const auto allocation = history.Prepare(draw);
     u32 flags = (allocation.store ? Shader::MotionVectors::FlagStore : 0) |
                 (allocation.load ? Shader::MotionVectors::FlagLoad : 0);
+    if(instance_match && allocation.load) flags|=Shader::MotionVectors::FlagAffineInstance;
     if (!flags) {
         return 0;
     }
