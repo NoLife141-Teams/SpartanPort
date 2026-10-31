@@ -307,7 +307,8 @@ bool Dlss::EvaluateNrScene(vk::CommandBuffer command, const NrFrame& input) {
     frame.display_encoded = 1;
     frame.reset = input.reset;
     frame.depth_inverted = 0; // GoW3 hardware depth, near=0, far/clear=1
-    frame.settings = {1, 1, 1, 0, 0, 0, 1};
+    frame.settings = {input.strengths[0],input.strengths[1],input.strengths[2],0,
+                      input.strengths[3],0,1};
     if (impl->nr->Evaluate(command, &frame)) return true;
     impl->problem = impl->nr->Problem();
     return false;

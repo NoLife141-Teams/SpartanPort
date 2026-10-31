@@ -15,6 +15,8 @@ public:
     ~Gow3Nr();
     bool Enabled() const;
     bool Active();
+    // Consumed by PrepareFrame after guest composition and a draw-pipe drain.
+    bool TakeEvaluatedFrame();
     void Observe(u64 shader,u32 slot,const void* bytes,size_t size,u64 depth,u32 w,u32 h);
     u64 Depth() const;
     bool OnFlip();

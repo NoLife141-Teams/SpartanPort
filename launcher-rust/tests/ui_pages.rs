@@ -2882,12 +2882,12 @@ fn graphics_dlss5_and_badge_controls_are_independent() {
     let dir = tempfile::tempdir().unwrap();
     let mut state = state(dir.path());
     open(&mut state, Page::Graphics);
-    click_tall(&mut state, "DLSS 5 + MSAA x2 (1080p)");
+    click_tall(&mut state, "DLSS 5 + MSAA x2");
     assert!(state.store.flag("dlss5_nr"));
     click_tall(&mut state, "Show DLSS 5 status badge");
     assert!(!state.store.flag("show_nr_badge"));
     assert!(state.store.flag("dlss5_nr"));
-    click_tall(&mut state, "DLSS 5 + MSAA x2 (1080p)");
+    click_tall(&mut state, "DLSS 5 + MSAA x2");
     assert!(!state.store.flag("dlss5_nr"));
     assert!(!state.store.flag("show_nr_badge"));
 }

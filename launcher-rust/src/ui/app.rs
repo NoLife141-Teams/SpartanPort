@@ -575,9 +575,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 pub fn apply_set(state: &mut State, key: &str, value: Value) -> Task<Message> {
     if state.store.set(key, value) {
         if key == "dlss5_nr" && state.store.flag("dlss5_nr") {
-            state
-                .store
-                .set("render_resolution", Value::String("native".into()));
+            if !crate::core::nr::supports_resolution(&state.store.text("render_resolution")) {
+                state
+                    .store
+                    .set("render_resolution", Value::String("native".into()));
+            }
             state.store.set("hdr", Value::Bool(false));
             state.store.set("no_msaa", Value::String("0".into()));
             return follow(
@@ -585,7 +587,8 @@ pub fn apply_set(state: &mut State, key: &str, value: Value) -> Task<Message> {
                 Cause::Keys(&[key, "render_resolution", "hdr", "no_msaa"]),
             );
         } else if state.store.flag("dlss5_nr")
-            && ((key == "render_resolution" && state.store.text(key) != "native")
+            && ((key == "render_resolution"
+                && !crate::core::nr::supports_resolution(&state.store.text(key)))
                 || (key == "hdr" && state.store.flag(key))
                 || (key == "no_msaa" && state.store.text(key) == "1"))
         {

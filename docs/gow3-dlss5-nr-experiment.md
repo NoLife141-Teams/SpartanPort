@@ -1,4 +1,143 @@
-# DLSS 5 NR : guides réels et HUD protégé en 1080p
+# DLSS 5 NR : guides réels, HUD protégé et rendu 4K
+
+## 30 octobre 2026 : cadence de présentation avec NR
+
+Le compteur CPU restait à 60 FPS alors que la cadence réelle d’affichage se
+dégradait avec NR. Sur une copie de The Caverns, en 4K/MSAA x2 vers l’écran
+2560×1440, PresentMon ETW mesure avant correction 15,56 % d’intervalles
+d’affichage supérieurs à 25 ms, contre 5,07 % sans NR. La session séparée
+avec timestamps GPU attribue environ 9,7–9,9 ms au traitement NVIDIA en 4K,
+plus environ 1,2 ms aux guides et conversions : la marge à 60 FPS est faible.
+
+La présentation attend désormais le signal de rendu de cette image avant
+l’acquisition du swapchain, puis la fin de sa copie/overlay avant QueuePresent.
+Les attentes portent sur le travail déjà soumis, hors du verrou de soumission ;
+aucun deviceWaitIdle. Chaque Frame mémorise si NR l’a réellement traitée,
+indépendamment du badge et des bascules F7. Une attente du rendu seul avait
+amélioré le premier essai mais échouait après une désactivation/réactivation ;
+l’attente de la copie finale couvre aussi ce cas.
+
+Les écritures de provenance diagnostique sont réservées aux captures explicites.
+Le jeu normal évite ainsi un tampon RGBA32F 4K (132 710 400 octets) et son écriture
+à chaque image. Les entrées NGX, la profondeur, les mouvements, les couleurs et
+MSAA x2 restent identiques.
+
+| Mesure ETW, intervalles d’affichage | Moyenne | Écart type | p99 | > 25 ms |
+| --- | --- | --- | --- | --- |
+| Ancien NR ON | 16,67 ms | 6,64 ms | 31,48 ms | 15,56 % |
+| Corrigé ON, badge caché | 16,67 ms | 1,92 ms | 20,59 ms | 0,87 % |
+| Corrigé ON après F7 OFF/ON, caché | 16,67 ms | 1,67 ms | 19,71 ms | 0,56 % |
+| Corrigé ON, badge visible | 16,66 ms | 2,31 ms | 26,55 ms | 1,17 % |
+| Même session OFF | 16,67 ms | 2,21 ms | 25,98 ms | 1,77 % |
+
+Mesures de 30 s (OFF : 20 s), début/fin exclus, sans captures brutes ni profiler
+GPU pendant ces relevés. Le runtime final par défaut est aussi vérifié avec
+quatre lectures GPU consécutives couleur entrée/sortie, profondeur, mouvements
+et provenance : valeurs finies, MSAA x2, historique conservé et aucun écart de
+fallback caméra. Les sauvegardes du paquet et les originaux gardent leurs empreintes.
+Preuves et CSV complets, y compris les essais partiels écartés :
+`out/verification/nr-pacing-20261030-230812/validation.json` et `pacing-analysis.json`.
+La scène mesurée est animée mais la caméra est stationnaire. Ces résultats ne
+certifient pas tous les chapitres ni la latence des commandes. Le coût GPU NR
+reste présent ; les profils d’apparence ne garantissent pas une baisse de ce coût.
+
+## 30 octobre 2026 : menu de profils en jeu
+
+F6 ouvre directement l’onglet DLSS 5 du menu natif. Le jeu est mis en pause
+pendant les réglages ; fermer le menu applique les forces sans redémarrage.
+Les curseurs intensité, tonalité locale, structure locale et détails de la
+peau vont de 0 à 100 %. Un changement passe en Personnalisé. Les valeurs
+personnalisées restent mémorisées lorsqu’un autre profil est essayé et au
+relancement. Le bouton par défaut restaure Intense et réinitialise Personnalisé.
+Le badge peut être masqué dans ce panneau sans désactiver NR.
+
+| Profil | Intensité | Tonalité locale | Structure locale | Peau |
+| --- | --- | --- | --- | --- |
+| Discret | 40 % | 40 % | 25 % | 0 % |
+| Standard | 75 % | 75 % | 50 % | 0 % |
+| Intense (apparence précédente) | 100 % | 100 % | 100 % | 0 % |
+
+Les quatre forces sont publiées ensemble par un mot atomique ; le thread GPU
+les transmet au SDK et réinitialise une fois l’historique lors du changement.
+Les captures diagnostiques indiquent aussi le profil et les pourcentages utilisés.
+La tonalité globale reste à 0, le style à 0 et le masque automatique activé.
+
+Validation sur une copie de The Caverns : les quatre profils sont appliqués,
+les bornes 0/100 %, le rappel de Personnalisé, sa persistance après relancement,
+le retour aux défauts et le badge masqué sont observés. Quatre captures réelles
+3840×2160 MSAA x2, avec intensité 0 %, ont un écart RGB entrée/sortie exactement
+nul ; les autres forces sont 75/50/100 %. Les tests natifs de réglages et les
+dix tables de traduction passent. Les deux sessions se terminent avec le code 0.
+Les sauvegardes source et du paquet conservent leurs empreintes.
+Preuves : `out/verification/nr-menu-20261030-224727/validation.json` et captures
+dans le même dossier. La préférence d’apparence reste subjective selon la scène.
+
+## 30 octobre 2026 : rendu NR 4K et écran 1440p
+
+Le profil Windows accepte maintenant les scènes 1920×1080, 2560×1440 et
+3840×2160. Graphismes expose la résolution de rendu ; choisir 4K conserve
+DLSS 5, MSAA x2 et SDR. Les autres tailles et HDR désactivent ce profil.
+Le badge indique séparément la taille réellement évaluée par NR et la taille
+de l'affichage. Le rendu reste fixe pendant une session : changer sa résolution
+demande un redémarrage. Les gardes de provenance, d'échantillonnage, de formats
+et de caméra restent appliquées avant toute évaluation.
+
+La demande finale de l'utilisateur est **4K interne, affichage 2560×1440 sans
+bordures sur le MSI G274QRFW**, avec sa vraie sauvegarde The Caverns.
+Une copie isolée de son Auto Save The Caverns 5:36:46 est chargée ; les
+sauvegardes du paquet et les originaux dans C:\\Games ne sont pas écrits par
+ces essais. Le cache copié du lanceur principal est réutilisé.
+
+Le lancement depuis le nouveau lanceur Rust Release atteint NR actif en
+3840×2160 sur une fenêtre 2560×1440, avec MSAA x2, Skip Intro et F7 ON/OFF
+observés. Il termine au moins 5 040 évaluations GPU et sort avec le code 0.
+La scène observée tient environ 60 i/s ; cette observation ne mesure pas tous
+les combats ni le reste du jeu. Le cache fournit 289 permutations réutilisées
+pour huit compilations dans cette session.
+
+Une seconde session diagnostique exporte quatre scènes consécutives, chacune
+avec couleur avant/après NR, profondeur matérielle, mouvements et provenance
+des guides à **3840×2160**, MSAA x2, sans reset et sans HUD dans l'entrée NR.
+L'erreur maximale caméra CPU/GPU est 0,000305 pixel et les mouvements de
+fallback ne présentent aucune discordance RG16. Les 8 244 correspondances
+indépendantes ont une médiane de 0,0306–0,0310 pixel par paire. La caméra de
+cette séquence est fixe : ces chiffres contrôlent les ressources 4K et les
+petites animations observées, sans certifier les grands mouvements caméra.
+Les captures 4K sont limitées à un groupe de quatre pour borner les fichiers
+de diagnostic à environ 1,73 Gio. Le lancement normal ne crée pas ces fichiers.
+
+Validation du code : 766 tests Rust de bibliothèque, 89 tests de pages et
+31 tests de sauvegarde des réglages passent ; Clippy avec `-D warnings`, le
+formatage et les six références visuelles de Graphismes passent. Le contrôle
+analytique de reprojection couvre 96 cas, incluant 1440p et 4K.
+Preuves locales : `out/verification/nr-native-4k-20261030-221322/` et
+`nr-capture/analysis.json` dans ce dossier.
+
+### Réglages NR présents dans le SDK et notre passerelle
+
+Le contrat installé est celui de `nvidia-remix-dlssnr-2`, runtime NR
+310.9.16.0. La passerelle transmet les paramètres suivants. Le menu DLSS 5 (F6) expose
+maintenant les quatre forces de 0 à 100 %, sans redémarrage :
+
+| Paramètre | Plage acceptée par la passerelle | Valeur actuelle |
+| --- | --- | --- |
+| Intensité de l'effet (`intensity`) | 0–1 | 1 |
+| Tonalité locale (`local_tone`) | 0–1 | 1 |
+| Structure locale (`local_structure`) | 0–1 | 1 |
+| Structure de la peau (`skin_structure`) | 0–1 | 0 |
+| Masque automatique de peau (`auto_mask`) | activé/désactivé | activé |
+| Style (`style`) | entier, variantes non documentées ici | 0 |
+
+La tonalité globale (`global_tone`) est réservée et doit rester à zéro dans
+cette passerelle. Le SDK déclare aussi des presets de modèle Default/A–G,
+un masque manuel et des modes de combinaison des masques ; ils ne sont pas
+exposés par notre API et leur disponibilité visuelle n'est pas validée.
+Le contrat NR utilisé n'expose pas de netteté dédiée. Les dimensions,
+l'échelle des mouvements, l'inversion de profondeur et le reset d'historique
+sont des paramètres de raccordement, pas des réglages artistiques.
+Les essais de reprojection 4K ci-dessus utilisent le profil Intense. Les
+profils d’apparence sont des combinaisons locales de ces forces, pas les
+modèles NVIDIA A–G. Ils ne garantissent pas une qualité supérieure dans chaque scène.
 
 Le 28 octobre 2026, le chemin expérimental NR a été raccordé à la profondeur
 matérielle et aux mouvements caméra + géométrie du jeu. Deux chargements réels

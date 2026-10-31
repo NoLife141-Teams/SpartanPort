@@ -7,6 +7,18 @@
 
 namespace SpartanUi {
 inline constexpr std::pair<std::string_view, const char*> FrenchText[] = {
+    {"Choose a look, or adjust the sliders. Changes apply when you return to the game.", "Choisis un profil ou ajuste les curseurs. Les changements prennent effet à la reprise du jeu."},
+    {"Appearance preset", "Préréglage"},
+    {"Subtle", "Discret"},
+    {"Standard", "Standard"},
+    {"Intense", "Intense"},
+    {"Custom", "Personnalisé"},
+    {"Effect intensity", "Intensité de l’effet"},
+    {"Local tone", "Tonalité locale"},
+    {"Local structure", "Structure locale"},
+    {"Skin structure", "Détails de la peau"},
+    {"Restore defaults", "Valeurs par défaut"},
+    {"Enable DLSS 5 in the launcher before starting the game.", "Active DLSS 5 dans le lanceur avant de démarrer le jeu."},
     {"Windowed", "Fenêtré"},
     {"Borderless", "Fenêtre sans bordure"},
     {"Fullscreen", "Plein écran"},

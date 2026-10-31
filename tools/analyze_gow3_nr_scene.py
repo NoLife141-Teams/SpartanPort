@@ -22,17 +22,18 @@ def load(directory, index):
     meta = json.loads((directory/f'{index}.json').read_text())
     if not meta['complete'] or not meta['gpu_complete'] or meta['hud_included'] or not meta['motion_depth']:
         raise ValueError('Incomplete capture or wrong NR stage')
-    if (meta['width'], meta['height']) != (1920, 1080) or meta['jitter'] != [0, 0]:
-        raise ValueError('Expected native unjittered 1080p')
+    width, height = meta['width'], meta['height']
+    if (width, height) not in ((1920, 1080), (2560, 1440), (3840, 2160)) or meta['jitter'] != [0, 0]:
+        raise ValueError('Expected native unjittered 1080p, 1440p or 4K')
     arrays, hashes = {}, {}
     for name, dtype, channels in [('input.rgba32f', '<f4', 4), ('output.rgba32f', '<f4', 4),
                                    ('depth.r32f', '<f4', 1), ('motion.rg16f', '<f2', 2),
                                    ('guides.rgba32f', '<f4', 4)]:
         path = directory/f'{index}.{name}'
-        expected = 1920*1080*channels*np.dtype(dtype).itemsize
+        expected = width*height*channels*np.dtype(dtype).itemsize
         if path.stat().st_size != expected:
             raise ValueError('Unexpected capture size: '+str(path))
-        array = np.memmap(path, mode='r', dtype=dtype, shape=(1080, 1920, channels))
+        array = np.memmap(path, mode='r', dtype=dtype, shape=(height, width, channels))
         if not np.isfinite(array).all():
             raise ValueError('Nonfinite GPU readback: '+str(path))
         arrays[name.split('.')[0]] = array
@@ -54,20 +55,21 @@ def analyze(directory):
         'Affine association is conservative pose matching for repeated meshes, not an engine object ID. '
         'Camera fallback cannot explain untracked deformation, foliage or transparency. Short sequences do not certify all scenes.')
     for index, (meta, data, hashes) in enumerate(frames):
+        width, height = meta['width'], meta['height']
         z = data['depth'][:, :, 0]
         valid = data['guides'][:, :, 0] >= 1
         flow = data['motion'].astype(np.float32)
         difference = np.abs(data['output'][:, :, :3]-data['input'][:, :, :3])
         # CPU matrix calculation, independent of the shader's float32 multiply.
-        yy, xx = np.mgrid[32:1048:32, 32:1888:32]
+        yy, xx = np.mgrid[32:height-32:32, 32:width-32:32]
         depth = z[yy, xx]
         current = np.asarray(meta['camera_vp']).reshape(4, 4, order='F')
         previous = np.asarray(meta['previous_vp']).reshape(4, 4, order='F')
-        clip = np.stack((2*(xx+.5)/1920-1, 1-2*(yy+.5)/1080, 2*depth-1, np.ones_like(depth)), -1)
+        clip = np.stack((2*(xx+.5)/width-1, 1-2*(yy+.5)/height, 2*depth-1, np.ones_like(depth)), -1)
         projected = clip @ (previous @ np.linalg.inv(current)).T
         mask = (depth < 1) & (projected[:, :, 3] > 1e-5)
         ndc = projected[:, :, :2]/projected[:, :, 3:4]
-        cpu = np.stack(((ndc[:, :, 0]+1)*960-xx-.5, (1-ndc[:, :, 1])*540-yy-.5), -1)
+        cpu = np.stack(((ndc[:, :, 0]+1)*width/2-xx-.5, (1-ndc[:, :, 1])*height/2-yy-.5), -1)
         diagnostic = data['guides'][yy, xx, 2:4]
         camera_error = np.linalg.norm(cpu-diagnostic, axis=-1)[mask]
         # RG16F stores may round towards zero rather than NumPy's nearest-even.
@@ -103,8 +105,8 @@ def analyze(directory):
         pw, cw = [np.lib.stride_tricks.sliding_window_view(gray, (SIDE, SIDE)) for gray in (pg, cg)]
         matches = []
         margin = HALF+RADIUS+4
-        for y in range(48, 1080-48, 40):
-            for x in range(48, 1920-48, 48):
+        for y in range(48, height-48, 40):
+            for x in range(48, width-48, 48):
                 patch = cg[y-HALF:y+HALF+1, x-HALF:x+HALF+1]
                 if patch.std() < .012 or not 0 < z[y, x] < .99999:
                     continue
@@ -113,7 +115,7 @@ def analyze(directory):
                     continue
                 measured, score = found
                 px, py = round(x+measured[0]), round(y+measured[1])
-                if not (margin < px < 1920-margin and margin < py < 1080-margin):
+                if not (margin < px < width-margin and margin < py < height-margin):
                     continue
                 back = match(cw, pg[py-HALF:py+HALF+1, px-HALF:px+HALF+1], px, py)
                 if back is None or np.hypot(px+back[0][0]-x, py+back[0][1]-y) > 1:

@@ -686,6 +686,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     // Flush frame creation commands.
     frame->ready_semaphore = draw_scheduler.GetWorkSemaphore()->Handle();
     frame->ready_tick = draw_scheduler.CurrentTick();
+    frame->nr_evaluated = rasterizer->TakeNrEvaluatedFrame();
     SubmitInfo info{};
     draw_scheduler.Flush(info);
 
@@ -881,6 +882,21 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
         swapchain.Recreate(window.GetWidth(), window.GetHeight());
     }
 
+    // NR is expensive enough that submitting the presentation while its scene
+    // is still rendering makes the Windows flip cadence uneven despite a 60 Hz
+    // CPU counter. Wait for this frame's submitted timeline value before acquiring
+    // the swapchain image. Do not idle the device or wait on future frames.
+    if (frame->nr_evaluated && is_game_frame && !is_reusing_frame) {
+        static const bool announced=[] {
+            std::puts("GoW3 NR presentation: rendered-frame and final-copy readiness enabled");
+            return true;
+        }();
+        (void)announced;
+        const vk::SemaphoreWaitInfo ready{.semaphoreCount=1,
+            .pSemaphores=&frame->ready_semaphore,.pValues=&frame->ready_tick};
+        const auto result=instance.GetDevice().waitSemaphores(ready,std::numeric_limits<u64>::max());
+        ASSERT_MSG(result==vk::Result::eSuccess,"NR presentation readiness failed: {}",vk::to_string(result));
+    }
     if (!swapchain.AcquireNextImage()) {
         if (!window.IsMinimized() && window.GetWidth() > 0 && window.GetHeight() > 0) {
             swapchain.Recreate(window.GetWidth(), window.GetHeight());
@@ -1023,6 +1039,16 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
     info.AddSignal(frame->present_done);
     scheduler.Flush(info);
 
+    // The final blit/overlay must also be complete before handing this NR frame
+    // to Windows. Waiting only on the scene timeline improved initial pacing but
+    // still stuttered after F7 off/on. This fence belongs to the submission above;
+    // wait outside submit_mutex so the recorder can submit and signal it.
+    if (frame->nr_evaluated && is_game_frame && !is_reusing_frame) {
+        const auto result = instance.GetDevice().waitForFences(
+            frame->present_done, true, std::numeric_limits<u64>::max());
+        ASSERT_MSG(result == vk::Result::eSuccess, "NR swapchain readiness failed: {}",
+                   vk::to_string(result));
+    }
     // Present to swapchain.
     bool presented;
     {
@@ -1077,6 +1103,7 @@ Frame* Presenter::GetRenderFrame() {
         RecreateFrame(frame, expected_frame_width, expected_frame_height);
     }
 
+    frame->nr_evaluated = false;
     return frame;
 }
 

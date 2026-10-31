@@ -7,6 +7,20 @@
 
 namespace SpartanUi {
 inline constexpr std::pair<std::string_view, const char*> SpanishText[] = {
+    {"Choose a look, or adjust the sliders. Changes apply when you return to the game.", "Choose a look, or adjust the sliders. Changes apply when you return to the game."},
+    {"Appearance preset", "Appearance preset"},
+    {"Subtle", "Subtle"},
+    {"Standard", "Standard"},
+    {"Intense", "Intense"},
+    {"Custom", "Custom"},
+    {"Effect intensity", "Effect intensity"},
+    {"Local tone", "Local tone"},
+    {"Local structure", "Local structure"},
+    {"Skin structure", "Skin structure"},
+    {"Restore defaults", "Restore defaults"},
+    {"Enable DLSS 5 in the launcher before starting the game.", "Enable DLSS 5 in the launcher before starting the game."},
+    {"Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working.", "Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working."},
+    {"Show DLSS 5 status badge", "Show DLSS 5 status badge"},
     {"Windowed", "Ventana"},
     {"Borderless", "Ventana sin bordes"},
     {"Fullscreen", "Pantalla completa"},

@@ -10,6 +10,7 @@
 #pragma once
 
 #include <memory>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,7 @@ public:
     struct NrFrame {
         Resource color, output, depth, motion;
         bool reset;
+        std::array<float,4> strengths{1,1,1,0};
     };
     bool EvaluateNrScene(vk::CommandBuffer command, const NrFrame& frame);
     void ReleaseNrFeature();

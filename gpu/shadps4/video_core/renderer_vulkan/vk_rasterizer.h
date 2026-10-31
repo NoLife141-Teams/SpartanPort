@@ -56,6 +56,12 @@ public:
         return *upscaler;
     }
 
+    // Called in draw order when the composed guest frame is handed to Presenter.
+    bool TakeNrEvaluatedFrame() {
+        DrainDrawPipe();
+        return gow3_nr->TakeEvaluatedFrame();
+    }
+
     [[nodiscard]] VideoCore::TextureCache& GetTextureCache() noexcept {
         return texture_cache;
     }
