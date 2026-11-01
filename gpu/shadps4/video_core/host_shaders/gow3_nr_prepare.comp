@@ -10,7 +10,11 @@ layout(local_size_x=8,local_size_y=8) in;
 layout(binding=0) uniform SceneTexture scene_depth;
 layout(binding=1) uniform SceneTexture scene_color;
 layout(binding=2) uniform SceneTexture object_motion;
+#ifdef NR_FUSED
+layout(binding=3,rgba32f) writeonly uniform image2D color_out;
+#else
 layout(binding=3,rgba16f) writeonly uniform image2D color_out;
+#endif
 layout(binding=4,r32f) writeonly uniform image2D depth_out;
 layout(binding=5,rg16f) writeonly uniform image2D motion_out;
 #ifdef NR_GUIDES
@@ -35,17 +39,24 @@ void main() {
         flow=vec2((ndc.x+1)*.5*sz.x,(1-ndc.y)*.5*sz.y)-current;
     }
     vec4 m=texelFetch(object_motion,p,s);
-    bool object_valid=m.z>.999 && abs(m.w-d)<=2e-7 && all(lessThan(abs(m.xy),vec2(sz)));
+    bool object_valid=pc.camera_valid!=0 && m.z>.999 && abs(m.w-d)<=2e-7 && all(lessThan(abs(m.xy),vec2(sz)));
 #ifdef NR_GUIDES
     imageStore(guide_diagnostic,p,vec4(object_valid?(m.z>1.5?2:1):0,m.w,flow));
 #endif
     if(object_valid) flow=m.xy;
     if(any(isnan(flow))||any(isinf(flow))) flow=vec2(0);
 #ifdef SINGLE_SAMPLE
-    imageStore(color_out,p,texelFetch(scene_color,p,0));
+    vec4 c=texelFetch(scene_color,p,0);
 #else
-    imageStore(color_out,p,(texelFetch(scene_color,p,0)+texelFetch(scene_color,p,1))*.5);
+    vec4 c=(texelFetch(scene_color,p,0)+texelFetch(scene_color,p,1))*.5;
 #endif
+#ifdef NR_FUSED
+    // Preserve the old RGBA16F intermediate's rounding before restoring sRGB.
+    c=vec4(unpackHalf2x16(packHalf2x16(c.xy)),unpackHalf2x16(packHalf2x16(c.zw)));
+    vec3 v=clamp(c.rgb,0,1);
+    c.rgb=mix(1.055*pow(v,vec3(1.0/2.4))-.055,12.92*v,lessThanEqual(v,vec3(.0031308)));
+#endif
+    imageStore(color_out,p,c);
     imageStore(depth_out,p,vec4(d));
     imageStore(motion_out,p,vec4(flow,0,0));
 }

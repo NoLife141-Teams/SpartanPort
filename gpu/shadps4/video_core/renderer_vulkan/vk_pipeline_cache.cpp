@@ -885,7 +885,7 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         const bool gow3_motion=Gow3::MotionDiagnostic() && bound==0 &&
             regs.depth_buffer.z_info.format==AmdGpu::DepthBuffer::ZFormat::Z32Float &&
             regs.depth_buffer.NumSamples()==(AmdGpu::NoMsaa()?1u:2u) && regs.depth_control.depth_enable && regs.depth_control.depth_write_enable;
-        motion_possible = Shader::MotionVectors::positions_address != 0 && (Gow3::MotionDiagnostic()?gow3_motion:bound>=5) &&
+        motion_possible = Gow3::MotionWorkNeeded() && Shader::MotionVectors::positions_address != 0 && (Gow3::MotionDiagnostic()?gow3_motion:bound>=5) &&
                           !regs.color_buffers[Shader::MotionVectors::Output] &&
                           regs.depth_buffer.DepthValid() &&
                           (regs.depth_buffer.NumSamples() == 1 || gow3_motion) && !regs.IsClipDisabled() &&

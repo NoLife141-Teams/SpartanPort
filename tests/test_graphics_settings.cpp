@@ -120,11 +120,14 @@ int main() {
     v.nr_appearance=SpartanNr::Default;v.nr_custom=SpartanNr::CustomDefault;v.menu_tab=0;
     SpartanSettings::Save();
     v.show_nr_badge = false;
+    v.overlay_frame_graph=true;
     SpartanSettings::Save();
     assert(Read(path).find("show_nr_badge=0\n") != std::string::npos);
     v.show_nr_badge = true;
+    v.overlay_frame_graph=false;
     SpartanSettings::Load();
     assert(!v.show_nr_badge); // Visibility survives the next launch.
+    assert(v.overlay_frame_graph);
     SetEnvironment("SPARTAN_SHOW_NR_BADGE", "1");
     SpartanSettings::Load();
     assert(v.show_nr_badge);

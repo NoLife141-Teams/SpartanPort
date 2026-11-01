@@ -7,6 +7,8 @@
 #include <cstring>
 #include <limits>
 #include "gpu/shadps4/video_core/renderer_vulkan/gow3_camera_inputs.h"
+#include "gpu/shadps4/video_core/renderer_vulkan/gow3_nr_contract.h"
+#include "gpu/shadps4/video_core/renderer_vulkan/gow3_nr_control.h"
 
 using namespace Vulkan::Gow3;
 
@@ -28,6 +30,21 @@ static void Observe(CameraInputs& inputs, const std::array<float,36>& bytes,
 }
 
 int main() {
+    NrControl control;
+    control.state=NrState::Waiting;
+    const auto old=control.generation.fetch_add(1);
+    control.Complete(old,10);
+    assert(control.state==NrState::Waiting && control.completed==0);
+    control.Complete(old+1,11);
+    assert(control.state==NrState::Active && control.completed==11);
+    control.state=NrState::Neutral;
+    control.generation.fetch_add(1);
+    control.Complete(old+1,12);
+    assert(control.state==NrState::Neutral && control.completed==11);
+    // Raw composition identity survives warm-up and imported-cache permutations.
+    assert(IsSceneComposition(0x475a41468b1a1fbcull,0x475a4146e3a74097ull));
+    assert(!IsSceneComposition(0xefd04d8023fec408ull,0xefd0530963dc1d55ull));
+    assert(!IsSceneComposition(0x475a41468b1a1fbcull,0x475a4146e3a74096ull));
     // Regression: the GoW3 capture has a declared color export, but color0 is
     // unbound. It is eligible for depth diagnostics, unlike a bound color pass.
     assert(IsDepthOnlyDraw(1,0,true,true,true));
@@ -193,5 +210,22 @@ int main() {
     assert(completed.FinishFrame()==Status::Candidate);
     assert(completed.previous==moved && completed.current==identity);
     assert(std::strcmp(Name(Status::Candidate),"camera-candidate")==0);
+    CameraInputs cuts;
+    Observe(cuts,bytes); assert(cuts.FinishFrame(100)==Status::Warming);
+    Observe(cuts,bytes); assert(cuts.FinishFrame(117)==Status::Candidate && !cuts.discontinuity);
+    auto flip=Identity(); flip[0]=flip[10]=-1;
+    Observe(cuts,Constants(flip));
+    assert(cuts.FinishFrame(134)==Status::Candidate && cuts.discontinuity);
+    Observe(cuts,Constants(flip));
+    assert(cuts.FinishFrame(151)==Status::Candidate && !cuts.discontinuity);
+    Observe(cuts,Constants(flip));
+    assert(cuts.FinishFrame(500)==Status::Candidate && cuts.discontinuity);
+    // A quick but continuous pan remains usable; hard translations do not.
+    auto pan=Identity();pan[12]=.2;
+    assert(!CameraInputs::Discontinuous(Identity(),pan));
+    pan[12]=3;
+    assert(CameraInputs::Discontinuous(Identity(),pan));
+    Observe(cuts,Constants(flip),2);
+    assert(cuts.FinishFrame(517)==Status::Candidate && cuts.discontinuity);
     std::puts("GoW3 camera input CPU tests passed (synthetic inputs; not native DLAA validation)");
 }

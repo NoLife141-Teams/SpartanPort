@@ -353,7 +353,8 @@ private:
     bool scene_started = false;
     std::unique_ptr<ObjectMotion> object_motion;
     std::unique_ptr<Gow3Nr> gow3_nr;
-    std::array<Gow3::Provenance::Identity,Gow3::Provenance::Bindings::Capacity> gow3_nr_bindings{};
+    struct NrBinding { VideoCore::ImageId id{}; u64 uid{}; };
+    std::array<NrBinding,Gow3::Provenance::Bindings::Capacity> gow3_nr_bindings{};
     void ProcessGow3Nr(const GraphicsPipeline* pipeline);
     bool motion_draw = false;
     u64 motion_geometry{};    ///< vertex-stream identity of the current direct draw

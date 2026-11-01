@@ -47,6 +47,7 @@ bool EqualsIgnoreCase(std::string_view a, std::string_view b) {
 }
 
 void Set(Values& v, const std::string& key, const std::string& value) {
+    if(key=="overlay_frame_graph") {v.overlay_frame_graph=std::atoi(value.c_str())!=0;return;}
     const float f = float(std::atof(value.c_str()));
     const int i = std::atoi(value.c_str());
     static const char* const overlay_keys[] = {"overlay_fps", "overlay_frametime", "overlay_upscaler",
@@ -461,6 +462,7 @@ void Save() {
     std::fprintf(file, "texture_quality=%d\n", v.texture_quality.load());
     std::fprintf(file, "shadows=%d\n", int(v.shadows.load()));
     std::fprintf(file, "pause_game=%d\n", int(v.pause_game.load()));
+    std::fprintf(file, "overlay_frame_graph=%d\n", int(v.overlay_frame_graph.load()));
     std::fprintf(file,
                  "overlay_fps=%d\noverlay_frametime=%d\noverlay_upscaler=%d\noverlay_gpu=%d\n"
                  "overlay_cpu=%d\noverlay_ram=%d\noverlay_vram=%d\noverlay_scale=%d\noverlay_corner=%d\n"

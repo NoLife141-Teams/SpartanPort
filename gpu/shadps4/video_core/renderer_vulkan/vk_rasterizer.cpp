@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdio>
+#include "gow3_nr_contract.h"
 #include <cstdlib>
 #include <cstring>
 #include <bit>
@@ -1238,25 +1239,10 @@ void Rasterizer::RecordGow3Pixels() {
 
 void Rasterizer::ProcessGow3Nr(const GraphicsPipeline* pipeline) {
     if(!gow3_nr->Enabled()) return;
-    const auto& key=pipeline->GetGraphicsKey();
-    if(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash!=0x475a41468b1a1fbcull ||
-       pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash!=0x475a4146e3a74097ull) return;
-    // Observed composition pair; the cache can assign a different module ordinal.
-    const u64 composition_ps=AmdGpu::NoMsaa()?0xefd0530963dc1d54ull:0xefd0530963dc1d55ull;
-    // Stage keys contain a module-vector ordinal (HashCombine(raw_hash,perm)),
-    // not a semantic variant ID. A cold NR cache observed the same single-sample
-    // composition at ordinal 1. Source backing/format/sample guards below still
-    // prove the native scene.
-    const auto ps_key=key.stage_hashes[u32(Shader::SwStage::Fragment)];
-    const bool nr_cold=Gow3::NeuralSceneRequested()&&AmdGpu::NoMsaa()&&ps_key==0xefd0530963dc1d55ull;
-    if(key.stage_hashes[u32(Shader::SwStage::Vertex)]!=0xefd04d8023fec408ull ||
-       (ps_key!=composition_ps&&!nr_cold)) {
-        static bool reported=false;
-        if(!reported) {reported=true;std::printf("GoW3 NR scene: unapproved composition keys vs=%016llx ps=%016llx samples=%u\n",
-            (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Vertex)],
-            (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Fragment)],AmdGpu::NoMsaa()?1:2);}
-        return;
-    }
+    const auto stages=pipeline->GetStages();
+    const auto* vertex=stages[u32(Shader::SwStage::Vertex)];
+    const auto* fragment=stages[u32(Shader::SwStage::Fragment)];
+    if(!vertex || !fragment || !Gow3::IsSceneComposition(vertex->pgm_hash,fragment->pgm_hash)) return;
     Gow3::Provenance::Identity sources[2]{};
     vk::ImageLayout layouts[2]{};
     vk::DescriptorImageInfo* color_binding=nullptr;
@@ -1267,7 +1253,14 @@ void Rasterizer::ProcessGow3Nr(const GraphicsPipeline* pipeline) {
         const auto index=u32(write.pImageInfo-image_infos.data());
         if(index>=image_infos.size() || index>=gow3_nr_bindings.size()) continue;
         const u32 n=write.dstBinding-1;
-        sources[n]=gow3_nr_bindings[index];layouts[n]=write.pImageInfo->imageLayout;found|=1u<<n;
+        if(found&(1u<<n)) {found=0;break;}
+        // Resolve provenance only for the known composition's two live views,
+        // after the texture helper has joined. Retain the binding-time UID so
+        // slot reuse cannot silently turn an old handle into another resource.
+        const auto binding=gow3_nr_bindings[index];
+        sources[n]=texture_cache.DescribeProvenance(binding.id,write.pImageInfo->imageView);
+        if(!binding.uid || sources[n].uid!=binding.uid) {found=0;break;}
+        layouts[n]=write.pImageInfo->imageLayout;found|=1u<<n;
         if(n==1) color_binding=&image_infos[index];
     }
     vk::ImageView depth{},color{},motion{};u32 w=0,h=0;
@@ -1280,6 +1273,7 @@ void Rasterizer::ProcessGow3Nr(const GraphicsPipeline* pipeline) {
         if(!error) motion=object_motion->RecordDiagnosticRead(w,h,sources[0].uid);
     }
     const auto replacement=gow3_nr->Process(depth,layouts[0],color,layouts[1],motion,sources[0].uid,w,h);
+    if(gow3_nr->TakeHistoryReset()) object_motion->InvalidateHistory();
     if(replacement && color_binding) { color_binding->imageView=replacement;color_binding->imageLayout=vk::ImageLayout::eGeneral; }
     // Composition closes exactly one produced scene, even when a queued flip
     // happens to contain two scenes. Accepted-flip diagnostics remain independent.
@@ -2856,7 +2850,7 @@ void Rasterizer::NoteGow3Binding(VideoCore::ImageId id,Gow3::Provenance::Path pa
     // completion. No access to Pair::Capture from the helper thread.
     const auto index=u32(image_infos.size()-1);
     if(gow3_nr->Enabled() && index<gow3_nr_bindings.size())
-        gow3_nr_bindings[index]=texture_cache.DescribeProvenance(id,image_infos.back().imageView);
+        gow3_nr_bindings[index]={id,id?texture_cache.GetImage(id).image_uid:0};
     if(!gow3_provenance_enabled || !gow3_image_provenance.Enabled()) return;
     if(index>=Gow3::Provenance::Bindings::Capacity) {
         gow3_image_provenance.Set(index,{},path); return;

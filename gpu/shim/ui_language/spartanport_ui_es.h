@@ -7,6 +7,9 @@
 
 namespace SpartanUi {
 inline constexpr std::pair<std::string_view, const char*> SpanishText[] = {
+    {"Frame time graph", "Frame time graph"},
+    {"CPU presentation intervals; display cadence is measured separately.", "CPU presentation intervals; display cadence is measured separately."},
+    {"CPU presentation (ms)", "CPU presentation (ms)"},
     {"Choose a look, or adjust the sliders. Changes apply when you return to the game.", "Choose a look, or adjust the sliders. Changes apply when you return to the game."},
     {"Appearance preset", "Appearance preset"},
     {"Subtle", "Subtle"},

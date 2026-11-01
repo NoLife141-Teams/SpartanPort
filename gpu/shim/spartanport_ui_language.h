@@ -25,6 +25,9 @@ inline bool WantsChinese(std::string_view language) {
     return language == "zh" || language.starts_with("zh-") || language.starts_with("zh_");
 }
 inline constexpr std::pair<std::string_view, const char*> ChineseText[] = {
+    {"Frame time graph", "Frame time graph"},
+    {"CPU presentation intervals; display cadence is measured separately.", "CPU presentation intervals; display cadence is measured separately."},
+    {"CPU presentation (ms)", "CPU presentation (ms)"},
     {"Choose a look, or adjust the sliders. Changes apply when you return to the game.", "Choose a look, or adjust the sliders. Changes apply when you return to the game."},
     {"Appearance preset", "Appearance preset"},
     {"Subtle", "Subtle"},

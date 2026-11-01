@@ -7,6 +7,9 @@
 
 namespace SpartanUi {
 inline constexpr std::pair<std::string_view, const char*> FrenchText[] = {
+    {"Frame time graph", "Graphique du temps d’image"},
+    {"CPU presentation intervals; display cadence is measured separately.", "Intervalles de présentation CPU ; le rythme d’affichage est mesuré séparément."},
+    {"CPU presentation (ms)", "Présentation CPU (ms)"},
     {"Choose a look, or adjust the sliders. Changes apply when you return to the game.", "Choisis un profil ou ajuste les curseurs. Les changements prennent effet à la reprise du jeu."},
     {"Appearance preset", "Préréglage"},
     {"Subtle", "Discret"},

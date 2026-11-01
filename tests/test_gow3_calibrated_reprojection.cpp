@@ -23,6 +23,9 @@ int main() {
         };
         const auto current=forward(now,point),expected=forward(before,point);
         Matrix inverse{}; assert(Inverse(now.VP(),inverse)); ReprojectedSample out;
+        assert(!CameraInputs::Discontinuous(inverse,before.VP()));
+        auto cut=before;cut.yaw=3.14;
+        assert(CameraInputs::Discontinuous(inverse,cut.VP()));
         assert(ReprojectSample(inverse,before.VP(),view,view,current.x,current.y,current.depth,out));
         assert(std::hypot(out.x-expected.x,out.y-expected.y)<1e-8 && std::abs(out.depth-expected.depth)<1e-10);
         // Independently moving mesh: camera-only is wrong; known object history repairs it.

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "spartanport_overlay.h"
 #include "spartanport_ui_font.h"
+#include "spartanport_frame_times.h"
 
 #include <algorithm>
 #include <atomic>
@@ -155,6 +156,7 @@ float base_scale = 1.0f;
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
 float frame_ms_avg = 0.0f;
+SpartanPerfStats::FrameTimes frame_times;
 
 void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
@@ -685,6 +687,8 @@ void OverlayTab() {
     auto& s = SpartanSettings::Get();
     if (BeginRows("##overlay_on")) {
         CheckRow("Show overlay", s.show_fps, "The performance overlay in a corner of the screen.");
+        CheckRow("Frame time graph",s.overlay_frame_graph,
+                 "CPU presentation intervals; display cadence is measured separately.");
         CheckRow("Show DLSS 5 status badge", s.show_nr_badge,
                  "Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working.");
         ImGui::EndTable();
@@ -2791,7 +2795,7 @@ bool Visible() {
     const auto& s = SpartanSettings::Get();
     return initialized && (loading || background_total || PrefetchActive() || CompileNoteActive() ||
                            menu_open || text_entry_active || choice_active || choice_retiring ||
-                           toast_active || SpartanToast::Busy() || trophy_view || s.show_fps || NoticeActive() ||
+                           toast_active || SpartanToast::Busy() || trophy_view || s.show_fps || s.overlay_frame_graph || NoticeActive() ||
                            (s.actor_watch_supported && s.enemy_health_bar) ||
                            (s.show_nr_badge && Vulkan::Gow3::NeuralPreviewControl().visible.load()));
 }
@@ -2841,11 +2845,25 @@ void SetTextEntry(bool active, const std::string& prompt, const std::string& tex
 
 // Every window of a frame, between NewFrame and Render (Render; also tools/overlay_preview.cpp).
 void DrawWindows() {
+    if(SpartanSettings::Get().overlay_frame_graph && !loading && !menu_open) {
+        const auto* viewport=ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x+16*base_scale,
+            viewport->WorkPos.y+viewport->WorkSize.y-16*base_scale),ImGuiCond_Always,ImVec2(0,1));
+        ImGui::SetNextWindowBgAlpha(.78f);
+        ImGui::Begin("##frame-time-graph",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoDecoration|
+            ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing);
+        const auto summary=frame_times.Summarize();
+        ImGui::Text("%s | p99 %.1f | max %.1f",Tr("CPU presentation (ms)"),summary.p99,summary.maximum);
+        ImGui::PlotLines("##intervals",frame_times.values.data(),int(frame_times.count),
+            frame_times.count==frame_times.values.size()?int(frame_times.next):0,nullptr,0,
+            std::max(33.34f,summary.maximum),ImVec2(320*base_scale,65*base_scale));
+        ImGui::End();
+    }
     if(SpartanSettings::Get().show_nr_badge && Vulkan::Gow3::NeuralPreviewControl().visible.load() && !loading && !menu_open) {
         using Vulkan::Gow3::NrState;
         auto& nr=Vulkan::Gow3::NeuralPreviewControl();
         const auto state=nr.state.load();
-        const char* label=state==NrState::Active?"NR ACTIF":state==NrState::Off?"NR OFF":
+        const char* label=state==NrState::Neutral?"NR NEUTRE (0%)":state==NrState::Active?"NR ACTIF":state==NrState::Off?"NR OFF":
             state==NrState::Waiting?"NR EN ATTENTE":state==NrState::Failed?"NR ERREUR":"NR INDISPONIBLE";
         const auto* viewport=ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x+viewport->WorkSize.x-16*base_scale,
@@ -2910,6 +2928,8 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     const auto now = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(now - last_present).count();
     last_present = now;
+    if(SpartanSettings::Get().overlay_frame_graph) frame_times.Push(ms);
+    else frame_times.Clear();
     if (ms > 0.0f && ms < 1000.0f) {
         frame_ms_avg = frame_ms_avg == 0.0f ? ms : frame_ms_avg * 0.95f + ms * 0.05f;
     }

@@ -68,6 +68,7 @@ struct Values {
     std::atomic<int> debug_view{DebugNone};
     std::atomic<bool> show_fps{false};
     std::atomic<bool> show_nr_badge{true};
+    std::atomic<bool> overlay_frame_graph{false};
     std::atomic<uint32_t> nr_appearance{SpartanNr::Default};
     std::atomic<uint32_t> nr_custom{SpartanNr::CustomDefault};
     /// Performance overlay (spartanport_perf_stats.h): items shown, font size and background opacity
