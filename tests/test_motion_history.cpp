@@ -4,10 +4,20 @@
 #include <cassert>
 #include <cstdio>
 #include "gpu/shadps4/video_core/renderer_vulkan/motion_history.h"
+#include "gpu/shadps4/video_core/renderer_vulkan/gow3_motion.h"
 
 using namespace Vulkan::Motion;
 
 int main() {
+    // Run once with the scene-NR environment to exercise live selection without
+    // relying on a Vulkan device. Ordinary upscaler tests retain their own mode.
+    if(Vulkan::Gow3::NeuralSceneRequested()) {
+        assert(!Vulkan::Gow3::MotionWorkNeeded());
+        Vulkan::Gow3::NeuralMotionEnabled()=true;
+        assert(Vulkan::Gow3::MotionWorkNeeded());
+        Vulkan::Gow3::NeuralMotionEnabled()=false;
+        assert(!Vulkan::Gow3::MotionWorkNeeded());
+    }
     const std::array<uint16_t, 5> indices{1000, 1007, 1002, 1007, UINT16_MAX};
     const auto range = IndexedRange(std::span(indices), -900, true);
     assert(range.first == 100 && range.count == 8);

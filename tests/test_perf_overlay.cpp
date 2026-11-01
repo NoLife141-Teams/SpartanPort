@@ -7,6 +7,7 @@
 #include <string>
 #include "spartanport_perf_stats.h"
 #include "spartanport_settings.h"
+#include "spartanport_frame_times.h"
 
 namespace P = SpartanPerfStats;
 
@@ -18,6 +19,15 @@ static std::string Read(const char* path) {
 }
 
 int main() {
+    P::FrameTimes intervals;
+    for(int i=0;i<240;++i) intervals.Push(16.67f);
+    intervals.Push(50);intervals.Push(60);intervals.Push(70);
+    auto summary=intervals.Summarize();
+    assert(summary.p99==50 && summary.maximum==70 && intervals.count==240);
+    for(int i=0;i<240;++i) intervals.Push(10);
+    assert(intervals.Summarize().maximum==10);
+    intervals.Push(1000);assert(intervals.count==0);
+    intervals.Push(16);assert(intervals.Summarize().p99==16);
     assert(P::CpuPercent(50, 100, 1) == 50.0f);
     assert(P::CpuPercent(400, 100, 8) == 50.0f);
     assert(P::CpuPercent(5000, 100, 4) == 100.0f);

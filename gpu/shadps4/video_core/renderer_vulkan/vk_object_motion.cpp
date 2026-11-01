@@ -97,7 +97,8 @@ ObjectMotion::~ObjectMotion() {
 }
 
 void ObjectMotion::OnFrameStart() {
-    if (!enabled) {
+    if (!enabled || !Gow3::MotionWorkNeeded()) {
+        written=false;
         return;
     }
     if(Gow3::MotionDiagnostic()) history.stats={};
@@ -146,7 +147,7 @@ void ObjectMotion::OnFrameStart() {
 }
 
 u32 ObjectMotion::PrepareDraw(const DrawInfo& input,const void* snapshot,size_t size) {
-    if (!enabled || SpartanToggle::Disabled(1u << 29) || params_used >= ParamsPerFrame) {
+    if (!enabled || !Gow3::MotionWorkNeeded() || SpartanToggle::Disabled(1u << 29) || params_used >= ParamsPerFrame) {
         return 0;
     }
     auto draw=input;
@@ -263,7 +264,7 @@ void ObjectMotion::Attach(RenderState& state, u32 width, u32 height,u64 depth_ui
 }
 
 vk::ImageView ObjectMotion::RecordDiagnosticRead(u32 width,u32 height,u64 depth_uid) {
-    if(!Gow3::MotionDiagnostic()||!written||width!=image_width||height!=image_height||
+    if(!Gow3::MotionDiagnostic()||!Gow3::MotionWorkNeeded()||!written||width!=image_width||height!=image_height||
        !depth_uid||depth_uid!=diagnostic_depth||diagnostic_depth_conflict) return {};
     const vk::ImageMemoryBarrier2 barrier{
         .srcStageMask=vk::PipelineStageFlagBits2::eAllCommands,

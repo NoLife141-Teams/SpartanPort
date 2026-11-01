@@ -47,6 +47,7 @@ bool EqualsIgnoreCase(std::string_view a, std::string_view b) {
 }
 
 void Set(Values& v, const std::string& key, const std::string& value) {
+    if(key=="overlay_frame_graph") {v.overlay_frame_graph=std::atoi(value.c_str())!=0;return;}
     const float f = float(std::atof(value.c_str()));
     const int i = std::atoi(value.c_str());
     static const char* const overlay_keys[] = {"overlay_fps", "overlay_frametime", "overlay_upscaler",
@@ -79,7 +80,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         return;
     }
     if (key == "menu_tab") {
-        v.menu_tab = i >= 0 && i <= 3 ? i : 0;
+        v.menu_tab = i >= 0 && i <= 4 ? i : 0;
         return;
     }
     if (key == "ui_language") {
@@ -124,6 +125,15 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.debug_view = std::clamp(i, 0, DebugViewCount - 1);
     } else if (key == "show_nr_badge") {
         v.show_nr_badge = i != 0;
+    } else if (key == "nr_profile") {
+        auto a=SpartanNr::Unpack(v.nr_appearance);
+        a.profile=i>=0&&i<=3?i:SpartanNr::Intense;
+        v.nr_appearance=SpartanNr::Pack(a);
+    } else if (key == "nr_custom_intensity" || key == "nr_custom_tone" ||
+               key == "nr_custom_structure" || key == "nr_custom_skin") {
+        const int channel=key=="nr_custom_intensity"?0:key=="nr_custom_tone"?1:
+                          key=="nr_custom_structure"?2:3;
+        v.nr_custom=SpartanNr::Edit(v.nr_custom,channel,i);
     } else if (key == "show_fps") {
         v.show_fps = i != 0;
     } else if (key == "display_mode") {
@@ -238,6 +248,8 @@ Values& Get() {
 
 void Load() {
     auto& v = Get();
+    v.nr_appearance=SpartanNr::Default;
+    v.nr_custom=SpartanNr::CustomDefault;
     v.menu_confirm_swap = 0;
     v.menu_confirm_swap_explicit = false;
     if (FILE* file = std::fopen(Path(), "r")) {
@@ -254,6 +266,9 @@ void Load() {
         std::fclose(file);
         std::printf("Settings: %s\n", Path());
     }
+    const int nr_profile=SpartanNr::Unpack(v.nr_appearance).profile;
+    v.nr_appearance=nr_profile==SpartanNr::Custom?v.nr_custom.load():
+        SpartanNr::Pack(SpartanNr::Preset(nr_profile));
     // Environment overrides (scripts, A/B tests).
     if (const char* env = std::getenv("SPARTAN_UPSCALER")) {
         v.upscaler = UpscalerOff;
@@ -409,6 +424,8 @@ void Save() {
         std::printf("Settings: cannot write %s\n", Path());
         return;
     }
+    const auto nr=SpartanNr::Unpack(v.nr_appearance);
+    const auto custom=SpartanNr::Unpack(v.nr_custom);
     std::fprintf(file,
                  "# spartanport settings (in-game menu: Insert / R3+L2)\n"
                  "upscaler=%s\npreset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
@@ -421,6 +438,9 @@ void Save() {
                  v.debug_view.load(), int(v.show_fps.load()),
                  int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()));
     std::fprintf(file, "output_res=%dx%d\n", OutputWidths[v.output_res], OutputHeights[v.output_res]);
+    std::fprintf(file,"nr_profile=%d\nnr_custom_intensity=%d\nnr_custom_tone=%d\n"
+                      "nr_custom_structure=%d\nnr_custom_skin=%d\n",
+        nr.profile,custom.intensity,custom.tone,custom.structure,custom.skin);
     std::fprintf(file, "red_orb_multiplier=%.3f\n", v.red_orb_multiplier.load());
     std::fprintf(file, "damage_dealt=%.3f\n", v.damage_dealt.load());
     std::fprintf(file, "damage_taken=%.3f\n", v.damage_taken.load());
@@ -442,6 +462,7 @@ void Save() {
     std::fprintf(file, "texture_quality=%d\n", v.texture_quality.load());
     std::fprintf(file, "shadows=%d\n", int(v.shadows.load()));
     std::fprintf(file, "pause_game=%d\n", int(v.pause_game.load()));
+    std::fprintf(file, "overlay_frame_graph=%d\n", int(v.overlay_frame_graph.load()));
     std::fprintf(file,
                  "overlay_fps=%d\noverlay_frametime=%d\noverlay_upscaler=%d\noverlay_gpu=%d\n"
                  "overlay_cpu=%d\noverlay_ram=%d\noverlay_vram=%d\noverlay_scale=%d\noverlay_corner=%d\n"

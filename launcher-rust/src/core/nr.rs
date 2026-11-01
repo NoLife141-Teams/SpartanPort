@@ -5,6 +5,10 @@ use indexmap::IndexMap;
 
 use crate::core::graphics_options::Options;
 
+pub fn supports_resolution(resolution: &str) -> bool {
+    matches!(resolution, "native" | "1440p" | "4K")
+}
+
 pub fn configure(
     env: &mut IndexMap<String, String>,
     graphics: &Options,
@@ -17,8 +21,8 @@ pub fn configure(
     if !windows {
         return Err("DLSS 5 NR currently requires Windows and an NVIDIA NR-compatible GPU.".into());
     }
-    if graphics.render_resolution != "native" || graphics.hdr != "0" {
-        return Err("DLSS 5 NR requires native 1920x1080 and SDR. Select the DLSS 5 profile in Graphics again, or disable it.".into());
+    if !supports_resolution(&graphics.render_resolution) || graphics.hdr != "0" {
+        return Err("DLSS 5 NR requires 1080p, 1440p or 4K rendering and SDR. Select a supported resolution in Graphics, or disable DLSS 5.".into());
     }
     for name in ["spartanport_dlssnr.dll", "nvngx_dlssnr.dll"] {
         let path = probe.with_file_name(name);
@@ -43,7 +47,7 @@ pub fn configure(
     ] {
         env.insert(key.into(), value.into());
     }
-    // A render-size compatibility override must not bypass the native profile.
+    // Render patches follow the selected resolution; an inherited override must not bypass it.
     env.shift_remove("SPARTAN_RENDER_RES");
     Ok(())
 }
@@ -69,7 +73,7 @@ mod tests {
             .unwrap_err()
             .contains("nvngx_dlssnr.dll"));
         fs::write(probe.with_file_name("nvngx_dlssnr.dll"), []).unwrap();
-        graphics.render_resolution = "4K".into();
+        graphics.render_resolution = "8K".into();
         assert!(configure(&mut env, &graphics, &probe, true).is_err());
         graphics.render_resolution = "native".into();
         graphics.hdr = "1".into();
@@ -81,8 +85,17 @@ mod tests {
         configure(&mut env, &graphics, &probe, true).unwrap();
         assert_eq!(env["SPARTAN_NO_MSAA"], "0");
         assert_eq!(env["SPARTAN_GOW3_NR_SCENE"], "1");
+        graphics.render_resolution = "4K".into();
+        configure(&mut env, &graphics, &probe, true).unwrap();
+        assert_eq!(graphics.render_resolution, "4K");
+        assert_eq!(env["SPARTAN_NO_MSAA"], "0");
         assert_eq!(env["SPARTAN_JITTER"], "0");
         assert!(!env.contains_key("SPARTAN_RENDER_RES"));
         assert!(!env.contains_key("SPARTAN_GOW3_NR_DUMP"));
+        graphics.render_resolution = "1440p".into();
+        configure(&mut env, &graphics, &probe, true).unwrap();
+        assert_eq!(graphics.render_resolution, "1440p");
+        assert_eq!(env["SPARTAN_NO_MSAA"], "0");
+        assert_eq!(env["SPARTAN_GOW3_NR_SCENE"], "1");
     }
 }

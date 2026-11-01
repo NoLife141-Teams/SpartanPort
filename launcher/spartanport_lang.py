@@ -2728,14 +2728,16 @@ EXTRA['id'].update({
     "L1 + a d-pad direction switches to that weapon with its switch attack (the weapon in Kratos' hands does its attack again). L1 + Cross does the switch attack of the weapon in his hands instead of cycling to the next weapon. The d-pad alone switches as before. Applied when the game starts.": 'L1 + arah d-pad beralih ke senjata tersebut dengan serangan pergantiannya (senjata yang dipegang Kratos mengulangi serangannya). L1 + Cross melakukan serangan pergantian senjata yang sedang dipegang, bukan beralih ke senjata berikutnya. D-pad saja tetap mengganti senjata seperti sebelumnya. Diterapkan saat game dimulai.',
 })
 EXTRA.setdefault('fr', {}).update({
-    'DLSS 5 + MSAA x2 (1080p)': 'DLSS 5 + MSAA x2 (1080p)',
-    'Starts enabled. F7 toggles DLSS 5 in game. Selects native 1080p, MSAA x2 and SDR; requires the NVIDIA NR runtime beside the game executable.': 'Actif au démarrage. F7 active ou désactive DLSS 5 en jeu. Sélectionne le 1080p natif, MSAA x2 et SDR ; nécessite les DLL NVIDIA NR à côté de l’exécutable du jeu.',
+    'DLSS 5 + MSAA x2': 'DLSS 5 + MSAA x2',
+    'Render resolution': 'Résolution de rendu',
+    'DLSS 5 processes the scene at this resolution. Restart the game after changing it.': 'DLSS 5 traite la scène à cette résolution. Redémarre le jeu après un changement.',
+    'Starts enabled. F7 toggles DLSS 5 in game. Supports 1080p, 1440p or 4K rendering with MSAA x2 and SDR; requires the NVIDIA NR runtime beside the game executable.': 'Actif au démarrage. F7 active ou désactive DLSS 5 en jeu. Prend en charge le rendu 1080p, 1440p ou 4K, MSAA x2 et SDR ; nécessite les DLL NVIDIA NR à côté de l’exécutable du jeu.',
     'Show DLSS 5 status badge': 'Afficher le badge DLSS 5',
     'Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working.': 'Maj+F7 affiche ou masque le badge en jeu. DLSS 5 et F7 restent actifs quand il est masqué.',
 })
 EXTRA['zh'].update({
-    'DLSS 5 + MSAA x2 (1080p)': 'DLSS 5 + MSAA x2（1080p）',
-    'Starts enabled. F7 toggles DLSS 5 in game. Selects native 1080p, MSAA x2 and SDR; requires the NVIDIA NR runtime beside the game executable.': '启动时启用。F7 在游戏中切换 DLSS 5。选择原生 1080p、MSAA x2 和 SDR；需将 NVIDIA NR 运行库放在游戏可执行文件旁。',
+    'DLSS 5 + MSAA x2': 'DLSS 5 + MSAA x2',
+    'Starts enabled. F7 toggles DLSS 5 in game. Supports 1080p, 1440p or 4K rendering with MSAA x2 and SDR; requires the NVIDIA NR runtime beside the game executable.': '启动时启用。F7 在游戏中切换 DLSS 5。支持 1080p、1440p 或 4K 渲染、MSAA x2 和 SDR；需将 NVIDIA NR 运行库放在游戏可执行文件旁。',
     'Show DLSS 5 status badge': '显示 DLSS 5 状态标记',
     'Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working.': 'Shift+F7 在游戏中显示或隐藏标记。隐藏标记后，DLSS 5 和 F7 仍正常工作。',
 })

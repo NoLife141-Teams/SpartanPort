@@ -7,11 +7,11 @@ using namespace Vulkan::Gow3;
 using namespace ProjectionFixture;
 int main() {
     size_t cases=0;
-    for(auto mode:{Depth::Normal,Depth::MinusOneToOne}) for(double height:{540.,-540.})
+    for(auto mode:{Depth::Normal,Depth::MinusOneToOne}) for(double height:{540.,-540.,1440.,-1440.,2160.,-2160.})
     for(double minimum:{0.,.2}) for(double z:{2.,5.,12.,35.}) {
         Camera now{.eye={.1,-.15,.3},.yaw=.04,.ox=.06,.oy=-.025,.depth=mode};
         Camera before{.eye={-.2,.1,-.1},.yaw=-.03,.ox=-.02,.oy=.02,.depth=mode};
-        const ReprojectionViewport view{11,height<0?553.:13.,960,height,minimum,.9,
+        const ReprojectionViewport view{11,height<0?13.-height:13.,std::abs(height)*16/9,height,minimum,.9,
             mode==Depth::MinusOneToOne?ClipDepth::MinusWToW:ClipDepth::ZeroToW};
         const Point point{.2,.1,z};
         // Analytic forward camera oracle supplies NDC independently of the inverse helper.
@@ -23,6 +23,9 @@ int main() {
         };
         const auto current=forward(now,point),expected=forward(before,point);
         Matrix inverse{}; assert(Inverse(now.VP(),inverse)); ReprojectedSample out;
+        assert(!CameraInputs::Discontinuous(inverse,before.VP()));
+        auto cut=before;cut.yaw=3.14;
+        assert(CameraInputs::Discontinuous(inverse,cut.VP()));
         assert(ReprojectSample(inverse,before.VP(),view,view,current.x,current.y,current.depth,out));
         assert(std::hypot(out.x-expected.x,out.y-expected.y)<1e-8 && std::abs(out.depth-expected.depth)<1e-10);
         // Independently moving mesh: camera-only is wrong; known object history repairs it.

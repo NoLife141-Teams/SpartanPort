@@ -37,6 +37,7 @@ struct Frame {
     vk::Semaphore ready_semaphore;
     u64 ready_tick;
     bool is_hdr{false};
+    bool nr_evaluated{false}; ///< NR work belonging to this frame, independent of badge/toggles.
     u8 id{};
     vk::Format format{}; ///< spartanport: of `image` (screenshots)
 };

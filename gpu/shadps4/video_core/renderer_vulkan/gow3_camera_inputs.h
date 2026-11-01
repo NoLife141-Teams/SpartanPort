@@ -103,6 +103,20 @@ inline const char* Name(Status s) {
 
 class CameraInputs {
 public:
+    // Conservative screen-space cut detector. Use several depths and positions:
+    // a single near-plane point would mistake ordinary camera translation for a
+    // cut. A majority moving over 62.5% of the screen, or behind the old camera,
+    // cannot provide useful temporal history. Matrices are homogeneous, so this
+    // also handles different projection scales without coefficient thresholds.
+    static bool Discontinuous(const Matrix& inverse_current, const Matrix& old) {
+        uint32_t changed=0;
+        for(double z:{0.,.9}) for(double y:{-.75,0.,.75}) for(double x:{-.75,0.,.75}) {
+            const auto p=Transform(old,Transform(inverse_current,{x,y,z,1}));
+            if(p[3]<=1e-8 || !std::isfinite(p[3]) ||
+               std::hypot(p[0]/p[3]-x,p[1]/p[3]-y)>1.25) ++changed;
+        }
+        return changed>9;
+    }
     // Caller proves vertex-stage, depth-only draw, writing D32S8, and slot 1.
     // Bytes must be a stable host snapshot, NEVER a guest address used as a label.
     void Observe(uint64_t shader, uint32_t slot, const void* bytes, size_t size,
@@ -121,12 +135,16 @@ public:
         }
         current=vp; inverse=inv; target=depth_target; width=w; height=h; seen=true;
     }
-    Status FinishFrame() {
+    Status FinishFrame(uint64_t now_ms=0) {
         status=invalid ? Status::Invalid : conflict ? Status::Conflict : !seen ? Status::Missing :
             previous_valid && width==previous_width && height==previous_height ?
                 Status::Candidate : Status::Warming;
+        discontinuity=status==Status::Candidate &&
+            (target!=previous_target || (now_ms && last_ms && now_ms-last_ms>250) ||
+             Discontinuous(inverse,last));
         previous_valid=seen && !invalid && !conflict;
         previous=last; last=current; previous_width=width; previous_height=height;
+        previous_target=target; last_ms=now_ms;
         seen=invalid=conflict=false; samples=0;
         return status;
     }
@@ -135,9 +153,10 @@ public:
     Matrix current{}, inverse{}, previous{};
     uint32_t width{},height{},samples{};
     Status status=Status::Missing;
+    bool discontinuity{};
 private:
     Matrix last{};
-    uint64_t target{};
+    uint64_t target{},previous_target{},last_ms{};
     uint32_t previous_width{},previous_height{};
     bool seen{},invalid{},conflict{},previous_valid{};
 };

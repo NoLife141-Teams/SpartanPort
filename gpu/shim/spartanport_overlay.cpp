@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "spartanport_overlay.h"
 #include "spartanport_ui_font.h"
+#include "spartanport_frame_times.h"
 
 #include <algorithm>
 #include <atomic>
@@ -155,6 +156,7 @@ float base_scale = 1.0f;
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
 float frame_ms_avg = 0.0f;
+SpartanPerfStats::FrameTimes frame_times;
 
 void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
@@ -627,11 +629,66 @@ void PerformanceTab() {
     }
 }
 
+void NrTab() {
+    auto& s=SpartanSettings::Get();
+    auto& nr=Vulkan::Gow3::NeuralPreviewControl();
+    Separator("DLSS 5");
+    ImGui::PushTextWrapPos(0);
+    UiText("Choose a look, or adjust the sliders. Changes apply when you return to the game.");
+    ImGui::PopTextWrapPos();
+    ImGui::BeginDisabled(!nr.guided.load() || !nr.available.load());
+    if(BeginRows("##nr_appearance")) {
+        auto appearance=SpartanNr::Unpack(s.nr_appearance.load());
+        int profile=appearance.profile;
+        const char* profiles[]={Tr("Subtle"),Tr("Standard"),Tr("Intense"),Tr("Custom")};
+        Row("Appearance preset");
+        if(ImGui::Combo("##value",&profile,profiles,4)) {
+            s.nr_appearance=profile==SpartanNr::Custom?s.nr_custom.load():
+                SpartanNr::Pack(SpartanNr::Preset(profile));
+            dirty=true;
+        }
+        ImGui::PopID();
+        const auto slider=[&](const char* label,int channel) {
+            const auto word=s.nr_appearance.load();
+            const auto a=SpartanNr::Unpack(word);
+            const int values[]={a.intensity,a.tone,a.structure,a.skin};
+            int value=values[channel];
+            Row(label);
+            if(ImGui::SliderInt("##value",&value,0,100,"%d%%",ImGuiSliderFlags_AlwaysClamp)) {
+                const auto next=SpartanNr::Edit(word,channel,value);
+                s.nr_custom=next;s.nr_appearance=next;dirty=true;
+            }
+            ImGui::PopID();
+        };
+        slider("Effect intensity",0);
+        slider("Local tone",1);
+        slider("Local structure",2);
+        slider("Skin structure",3);
+        ImGui::EndTable();
+    }
+    if(ImGui::Button(Tr("Restore defaults"))) {
+        s.nr_custom=SpartanNr::CustomDefault;s.nr_appearance=SpartanNr::Default;dirty=true;
+    }
+    ImGui::EndDisabled();
+    if(!nr.guided.load() || !nr.available.load()) {
+        ImGui::PushTextWrapPos(0);
+        DisabledText("Enable DLSS 5 in the launcher before starting the game.");
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::Spacing();
+    if(BeginRows("##nr_badge")) {
+        CheckRow("Show DLSS 5 status badge",s.show_nr_badge);
+        ImGui::EndTable();
+    }
+}
+
 void OverlayTab() {
     namespace P = SpartanPerfStats;
     auto& s = SpartanSettings::Get();
     if (BeginRows("##overlay_on")) {
         CheckRow("Show overlay", s.show_fps, "The performance overlay in a corner of the screen.");
+        CheckRow("Frame time graph",s.overlay_frame_graph,
+                 "CPU presentation intervals; display cadence is measured separately.");
         CheckRow("Show DLSS 5 status badge", s.show_nr_badge,
                  "Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working.");
         ImGui::EndTable();
@@ -812,7 +869,7 @@ void Menu() {
     }
     HeadingRule();
 
-    constexpr int TabCount = 4;
+    constexpr int TabCount = 5;
     const ImGuiIO& io = ImGui::GetIO();
     if (!io.WantTextInput) {
         const int step = ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false) || ImGui::IsKeyPressed(ImGuiKey_E, false) ? 1
@@ -823,7 +880,7 @@ void Menu() {
             requested_tab = (s.menu_tab + step + TabCount) % TabCount;
         }
     }
-    static const char* const tabs[TabCount] = {"Game", "Image", "Performance", "Overlay"};
+    static const char* const tabs[TabCount] = {"Game", "Image", "Performance", "Overlay", "DLSS 5"};
     if (requested_tab >= 0) {
         s.menu_tab = requested_tab;
         dirty = true;
@@ -844,6 +901,7 @@ void Menu() {
         case 0: GameTab(); break;
         case 1: ImageTab(); break;
         case 2: PerformanceTab(); break;
+        case 4: NrTab(); break;
         default: OverlayTab(); break;
         }
     }
@@ -2567,6 +2625,14 @@ bool HandleEvent(const SDL_Event& event) {
                 Vulkan::Gow3::NeuralPreviewControl().toggles.fetch_add(1);
             return true;
         }
+        if(event.key.key==SDLK_F6 && !text_entry_active && !choice_active && !trophy_view) {
+            if(down && !event.key.repeat) {
+                const bool close=menu_open && SpartanSettings::Get().menu_tab==4;
+                SetOpen(!close);
+                if(!close) requested_tab=4;
+            }
+            return true;
+        }
         if (event.key.key == SDLK_F12) {
             if (down && !event.key.repeat) {
                 VideoCore::RequestScreenshot(VideoCore::ScreenshotRequest::GameOnly);
@@ -2729,7 +2795,7 @@ bool Visible() {
     const auto& s = SpartanSettings::Get();
     return initialized && (loading || background_total || PrefetchActive() || CompileNoteActive() ||
                            menu_open || text_entry_active || choice_active || choice_retiring ||
-                           toast_active || SpartanToast::Busy() || trophy_view || s.show_fps || NoticeActive() ||
+                           toast_active || SpartanToast::Busy() || trophy_view || s.show_fps || s.overlay_frame_graph || NoticeActive() ||
                            (s.actor_watch_supported && s.enemy_health_bar) ||
                            (s.show_nr_badge && Vulkan::Gow3::NeuralPreviewControl().visible.load()));
 }
@@ -2779,11 +2845,25 @@ void SetTextEntry(bool active, const std::string& prompt, const std::string& tex
 
 // Every window of a frame, between NewFrame and Render (Render; also tools/overlay_preview.cpp).
 void DrawWindows() {
+    if(SpartanSettings::Get().overlay_frame_graph && !loading && !menu_open) {
+        const auto* viewport=ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x+16*base_scale,
+            viewport->WorkPos.y+viewport->WorkSize.y-16*base_scale),ImGuiCond_Always,ImVec2(0,1));
+        ImGui::SetNextWindowBgAlpha(.78f);
+        ImGui::Begin("##frame-time-graph",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoDecoration|
+            ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing);
+        const auto summary=frame_times.Summarize();
+        ImGui::Text("%s | p99 %.1f | max %.1f",Tr("CPU presentation (ms)"),summary.p99,summary.maximum);
+        ImGui::PlotLines("##intervals",frame_times.values.data(),int(frame_times.count),
+            frame_times.count==frame_times.values.size()?int(frame_times.next):0,nullptr,0,
+            std::max(33.34f,summary.maximum),ImVec2(320*base_scale,65*base_scale));
+        ImGui::End();
+    }
     if(SpartanSettings::Get().show_nr_badge && Vulkan::Gow3::NeuralPreviewControl().visible.load() && !loading && !menu_open) {
         using Vulkan::Gow3::NrState;
         auto& nr=Vulkan::Gow3::NeuralPreviewControl();
         const auto state=nr.state.load();
-        const char* label=state==NrState::Active?"NR ACTIF":state==NrState::Off?"NR OFF":
+        const char* label=state==NrState::Neutral?"NR NEUTRE (0%)":state==NrState::Active?"NR ACTIF":state==NrState::Off?"NR OFF":
             state==NrState::Waiting?"NR EN ATTENTE":state==NrState::Failed?"NR ERREUR":"NR INDISPONIBLE";
         const auto* viewport=ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x+viewport->WorkSize.x-16*base_scale,
@@ -2795,6 +2875,9 @@ void DrawWindows() {
         if(nr.guided.load()) ImGui::TextUnformatted(nr.hud_protected.load()?
             "DLSS 5 | profondeur + mouvements | HUD après NR":"DLSS 5 | guides de scène | en attente de validation GPU");
         else ImGui::TextUnformatted("APERÇU DLSS 5 | image finale + HUD | sans guides temporels");
+        if(nr.guided.load() && nr.width.load() && nr.height.load())
+            ImGui::Text("Rendu NR : %u x %u | Affichage : %.0f x %.0f",nr.width.load(),nr.height.load(),
+                viewport->Size.x,viewport->Size.y);
         ImGui::End();
     }
     if (loading) {
@@ -2845,6 +2928,8 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     const auto now = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(now - last_present).count();
     last_present = now;
+    if(SpartanSettings::Get().overlay_frame_graph) frame_times.Push(ms);
+    else frame_times.Clear();
     if (ms > 0.0f && ms < 1000.0f) {
         frame_ms_avg = frame_ms_avg == 0.0f ? ms : frame_ms_avg * 0.95f + ms * 0.05f;
     }

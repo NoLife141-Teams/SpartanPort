@@ -29,7 +29,7 @@ def hashes(directory):
 def prepare(seed, game, probe, pixels=False, motion=False, resolution='native', fullscreen=False, nr_preview=False, nr_scene=False):
     if nr_scene:
         if nr_preview: raise ValueError('Choose --nr-scene or --nr-preview')
-        if resolution!='native': raise ValueError('--nr-scene currently validates native 1080p only')
+        if resolution not in ('native','1440p','4K'): raise ValueError('--nr-scene supports 1080p, 1440p or 4K rendering only')
         nr_preview=True
     if nr_preview and (pixels or motion):
         raise ValueError('NR is an isolated experiment; do not combine with pixel/motion collection profiles')
@@ -143,7 +143,7 @@ def main():
     parser.add_argument('--resolution',choices=['native','1440p','4K'],default='native')
     parser.add_argument('--fullscreen',action='store_true')
     parser.add_argument('--nr-preview',action='store_true',help='NR 310.9.16 final-image experiment; F7 toggle, HUD included, no temporal guides')
-    parser.add_argument('--nr-scene',action='store_true',help='NR + MSAA x2 native 1080p before HUD, real depth/camera+object motion; F7 toggle')
+    parser.add_argument('--nr-scene',action='store_true',help='NR + MSAA x2 at 1080p, 1440p or 4K before HUD, real depth/camera+object motion; F7 toggle')
     args = parser.parse_args()
     session, manifest = prepare(args.seed_data, args.game_dir, args.probe, pixels=args.pixels,motion=args.motion,resolution=args.resolution,fullscreen=args.fullscreen,nr_preview=args.nr_preview,nr_scene=args.nr_scene)
     if args.launch:

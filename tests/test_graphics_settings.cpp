@@ -94,12 +94,40 @@ int main() {
     auto& v = SpartanSettings::Get();
     SpartanSettings::Load();
     assert(v.show_nr_badge); // New installations show the diagnostic status.
+    // Older profiles preserve the previous NR look; a custom look survives a
+    // preset selection and the next process, including all percentage boundaries.
+    assert(v.nr_appearance==SpartanNr::Default);
+    const auto custom=SpartanNr::Pack({0,100,53,17,SpartanNr::Custom});
+    v.nr_custom=custom;v.nr_appearance=custom;v.menu_tab=4;
+    SpartanSettings::Save();
+    v.nr_custom=SpartanNr::CustomDefault;v.nr_appearance=SpartanNr::Default;v.menu_tab=0;
+    SpartanSettings::Load();
+    assert(v.nr_custom==custom && v.nr_appearance==custom && v.menu_tab==4);
+    v.nr_appearance=SpartanNr::Pack(SpartanNr::Preset(SpartanNr::Subtle));
+    SpartanSettings::Save();
+    v.nr_custom=SpartanNr::CustomDefault;
+    SpartanSettings::Load();
+    assert(SpartanNr::Unpack(v.nr_appearance).intensity==40 && v.nr_custom==custom);
+    {
+        std::ofstream append(path,std::ios::app);
+        append<<"nr_profile=3\nnr_custom_skin=62\nnr_custom_intensity=-10\n"
+                "nr_custom_structure=38\nnr_custom_tone=143\n";
+    }
+    SpartanSettings::Load();
+    const auto bounded=SpartanNr::Unpack(v.nr_appearance);
+    assert(bounded.profile==SpartanNr::Custom && bounded.intensity==0 && bounded.tone==100 &&
+           bounded.structure==38 && bounded.skin==62);
+    v.nr_appearance=SpartanNr::Default;v.nr_custom=SpartanNr::CustomDefault;v.menu_tab=0;
+    SpartanSettings::Save();
     v.show_nr_badge = false;
+    v.overlay_frame_graph=true;
     SpartanSettings::Save();
     assert(Read(path).find("show_nr_badge=0\n") != std::string::npos);
     v.show_nr_badge = true;
+    v.overlay_frame_graph=false;
     SpartanSettings::Load();
     assert(!v.show_nr_badge); // Visibility survives the next launch.
+    assert(v.overlay_frame_graph);
     SetEnvironment("SPARTAN_SHOW_NR_BADGE", "1");
     SpartanSettings::Load();
     assert(v.show_nr_badge);
