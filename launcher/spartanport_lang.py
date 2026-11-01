@@ -2736,7 +2736,7 @@ EXTRA.setdefault('fr', {}).update({
     'Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working.': 'Maj+F7 affiche ou masque le badge en jeu. DLSS 5 et F7 restent actifs quand il est masqué.',
 })
 EXTRA['zh'].update({
-    'DLSS 5 + MSAA x2': 'DLSS 5 + MSAA x2（1080p）',
+    'DLSS 5 + MSAA x2': 'DLSS 5 + MSAA x2',
     'Starts enabled. F7 toggles DLSS 5 in game. Supports 1080p, 1440p or 4K rendering with MSAA x2 and SDR; requires the NVIDIA NR runtime beside the game executable.': '启动时启用。F7 在游戏中切换 DLSS 5。支持 1080p、1440p 或 4K 渲染、MSAA x2 和 SDR；需将 NVIDIA NR 运行库放在游戏可执行文件旁。',
     'Show DLSS 5 status badge': '显示 DLSS 5 状态标记',
     'Shift+F7 shows or hides the badge in game. Hiding it keeps DLSS 5 and F7 working.': 'Shift+F7 在游戏中显示或隐藏标记。隐藏标记后，DLSS 5 和 F7 仍正常工作。',

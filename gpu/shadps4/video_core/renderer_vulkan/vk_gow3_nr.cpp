@@ -2,6 +2,7 @@
 #include "vk_gow3_nr.h"
 #include "gow3_motion.h"
 #include "gow3_nr_control.h"
+#include "gow3_capture_writer.h"
 #include "spartanport_settings.h"
 #include "vk_instance.h"
 #include "vk_scheduler.h"
@@ -51,6 +52,7 @@ struct Gow3Nr::Impl {
     bool fused=!(std::getenv("SPARTAN_GOW3_NR_FUSED") &&
                  std::strcmp(std::getenv("SPARTAN_GOW3_NR_FUSED"),"0")==0);
     std::filesystem::path dump_directory;
+    std::shared_ptr<Gow3::CaptureWriter> capture_writer;
     struct Owned { VideoCore::UniqueImage image; vk::UniqueImageView view; vk::Format format{}; };
     // Linear scene, depth, motion, linear NR result, replacement, encoded input,
     // encoded NR result and diagnostic guide provenance.
@@ -186,28 +188,32 @@ struct Gow3Nr::Impl {
         const auto samples=AmdGpu::NoMsaa()?1u:2u;
         const auto vp=camera.current,previous=camera.previous;
         const auto look=SpartanNr::Unpack(appearance);
-        scheduler.DeferOperation([buffer,bytes,offsets,pixels,index,directory,tick,scene,depth_uid,count,vp,previous,samples,look,w=width,h=height,was_reset=reset] {
-            buffer->Invalidate(0,bytes);bool ok=true;
-            constexpr const char* names[]{"input.rgba32f","output.rgba32f","depth.r32f","motion.rg16f","guides.rgba32f","reference-input.rgba32f"};
-            constexpr u32 bpp[]{16,16,4,4,16,16};
-            for(u32 n=0;n<offsets.size();++n) {
-                const auto path=directory/(std::to_string(index)+"."+names[n]);
-                auto* file=std::fopen(path.string().c_str(),"wbx");
-                if(!file) {ok=false;continue;}
-                const bool written=std::fwrite(buffer->mapped_data.data()+offsets[n],1,pixels*bpp[n],file)==pixels*bpp[n];
-                const bool closed=std::fclose(file)==0;ok &= written&&closed;
-            }
-            auto* meta=std::fopen((directory/(std::to_string(index)+".json")).string().c_str(),"wbx");
-            if(meta) {
-                std::fprintf(meta,"{\"complete\":%s,\"gpu_complete\":true,\"index\":%u,\"tick\":%llu,\"scene\":%llu,\"evaluated\":%llu,\"depth_uid\":%llu,\"width\":%u,\"height\":%u,\"reset\":%s,\"jitter\":[0,0],\"motion_depth\":true,\"hud_included\":false,\"stage\":\"verified scene source before guest composition and HUD\",\"camera_vp\":[",
-                    ok?"true":"false",index,(unsigned long long)tick,(unsigned long long)scene,(unsigned long long)count,(unsigned long long)depth_uid,w,h,was_reset?"true":"false");
-                for(u32 n=0;n<16;++n) std::fprintf(meta,"%s%.17g",n?",":"",vp[n]);
-                std::fputs("],\"previous_vp\":[",meta);
-                for(u32 n=0;n<16;++n) std::fprintf(meta,"%s%.17g",n?",":"",previous[n]);
-                std::fprintf(meta,"],\"scene_samples\":%u,\"nr_profile\":%d,\"nr_strengths_percent\":[%d,%d,%d,%d]}\n",
-                    samples,look.profile,look.intensity,look.tone,look.structure,look.skin);std::fclose(meta);
-            } else ok=false;
-            std::printf("GoW3 NR scene: real-guide capture index=%u complete=%u scene=%llu\n",index,ok,(unsigned long long)scene);
+        scheduler.DeferOperation([writer=capture_writer,buffer,bytes,offsets,pixels,index,directory,tick,scene,depth_uid,count,vp,previous,samples,look,w=width,h=height,was_reset=reset] {
+            buffer->Invalidate(0,bytes);
+            const bool queued=writer->Submit([buffer,offsets,pixels,index,directory,tick,scene,depth_uid,count,vp,previous,samples,look,w,h,was_reset] {
+                bool ok=true;
+                constexpr const char* names[]{"input.rgba32f","output.rgba32f","depth.r32f","motion.rg16f","guides.rgba32f","reference-input.rgba32f"};
+                constexpr u32 bpp[]{16,16,4,4,16,16};
+                for(u32 n=0;n<offsets.size();++n) {
+                    const auto path=directory/(std::to_string(index)+"."+names[n]);
+                    auto* file=std::fopen(path.string().c_str(),"wbx");
+                    if(!file) {ok=false;continue;}
+                    const bool written=std::fwrite(buffer->mapped_data.data()+offsets[n],1,pixels*bpp[n],file)==pixels*bpp[n];
+                    const bool closed=std::fclose(file)==0;ok &= written&&closed;
+                }
+                auto* meta=std::fopen((directory/(std::to_string(index)+".json")).string().c_str(),"wbx");
+                if(meta) {
+                    std::fprintf(meta,"{\"complete\":%s,\"gpu_complete\":true,\"index\":%u,\"tick\":%llu,\"scene\":%llu,\"evaluated\":%llu,\"depth_uid\":%llu,\"width\":%u,\"height\":%u,\"reset\":%s,\"jitter\":[0,0],\"motion_depth\":true,\"hud_included\":false,\"stage\":\"verified scene source before guest composition and HUD\",\"camera_vp\":[",
+                        ok?"true":"false",index,(unsigned long long)tick,(unsigned long long)scene,(unsigned long long)count,(unsigned long long)depth_uid,w,h,was_reset?"true":"false");
+                    for(u32 n=0;n<16;++n) std::fprintf(meta,"%s%.17g",n?",":"",vp[n]);
+                    std::fputs("],\"previous_vp\":[",meta);
+                    for(u32 n=0;n<16;++n) std::fprintf(meta,"%s%.17g",n?",":"",previous[n]);
+                    std::fprintf(meta,"],\"scene_samples\":%u,\"nr_profile\":%d,\"nr_strengths_percent\":[%d,%d,%d,%d]}\n",
+                        samples,look.profile,look.intensity,look.tone,look.structure,look.skin);std::fclose(meta);
+                } else ok=false;
+                std::printf("GoW3 NR scene: real-guide capture index=%u complete=%u scene=%llu\n",index,ok,(unsigned long long)scene);
+            });
+            if(!queued) std::fprintf(stderr,"GoW3 NR scene: capture writer full index=%u\n",index);
         });
         Barrier(cmd);
     }
@@ -222,7 +228,10 @@ Gow3Nr::Gow3Nr(const Instance& i,Scheduler& s):impl(std::make_unique<Impl>(i,s))
     if(!ui.available) return;
     if(const char* value=std::getenv("SPARTAN_GOW3_NR_DUMP")) {
         const std::filesystem::path path(value);
-        if(path.is_absolute()&&std::filesystem::is_directory(path)&&std::filesystem::is_empty(path)) impl->dump_directory=path;
+        if(path.is_absolute()&&std::filesystem::is_directory(path)&&std::filesystem::is_empty(path)) {
+            impl->dump_directory=path;
+            impl->capture_writer=std::make_shared<Gow3::CaptureWriter>();
+        }
     }
     const char* start=std::getenv("SPARTAN_DLSS5_NR");
     impl->enabled=true;impl->active=start&&std::strcmp(start,"1")==0;ui.guided=true;
@@ -237,6 +246,8 @@ Gow3Nr::Gow3Nr(const Instance& i,Scheduler& s):impl(std::make_unique<Impl>(i,s))
 Gow3Nr::~Gow3Nr() {
     if(impl->initialized) {
         impl->scheduler.Finish();
+        impl->scheduler.PopPendingOperations();
+        impl->capture_writer.reset();
         impl->dlss->ReleaseNrFeature();
         impl->dlss->Shutdown();
     }

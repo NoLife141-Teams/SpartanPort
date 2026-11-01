@@ -630,6 +630,11 @@ mod tests {
     }
 
     #[test]
+    fn dlss5_label_does_not_restrict_the_supported_render_resolutions() {
+        assert_eq!(tr("zh", "DLSS 5 + MSAA x2"), "DLSS 5 + MSAA x2");
+    }
+
+    #[test]
     fn every_rust_only_string_has_portuguese() {
         // Ruling R33: each string of the Rust launcher alone comes in English and Portuguese.
         for (en, _) in UI_EXTRA {

@@ -346,6 +346,10 @@ add_executable(gow3-camera-inputs-test EXCLUDE_FROM_ALL ../tests/test_gow3_camer
 target_compile_options(gow3-camera-inputs-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(gow3-camera-inputs-test PRIVATE ..)
 
+add_executable(gow3-capture-writer-test EXCLUDE_FROM_ALL ../tests/test_gow3_capture_writer.cpp)
+target_compile_options(gow3-capture-writer-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(gow3-capture-writer-test PRIVATE ..)
+
 add_executable(gow3-pair-capture-test EXCLUDE_FROM_ALL ../tests/test_gow3_pair_capture.cpp
                shadps4/video_core/renderer_vulkan/gow3_pair_capture.cpp)
 target_compile_options(gow3-pair-capture-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
